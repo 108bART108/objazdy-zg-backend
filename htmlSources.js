@@ -1,14 +1,3 @@
-// Zrodlo #2: strony bez RSS (np. ZDW Zielona Gora, MZK Zielona Gora).
-// UWAGA (wazne): w przeciwienstwie do umZgora.js (ktory korzysta z
-// oficjalnego RSS i jest gotowy do produkcji), selektory CSS ponizej
-// sa PRZYKLADOWE - napisane na podstawie struktury strony w momencie
-// tworzenia tego pliku. Strony HTML zmieniaja sie bez ostrzezenia i
-// scraping bez RSS zawsze wymaga okresowej konserwacji.
-//
-// Przed uruchomieniem na produkcji: otworz kazdy adres w przegladarce,
-// kliknij prawym -> "Zbadaj element" na jednym wpisie i sprawdz, czy
-// selektory ponizej faktycznie pasuja. Zaktualizuj SOURCES.selector.
-
 const cheerio = require('cheerio');
 const { detectCategory, extractStreet } = require('./classify');
 
@@ -17,7 +6,7 @@ const SOURCES = [
     name: 'ZDW Zielona Gora',
     url: 'https://www.zdw.zgora.pl/utrudnienia/',
     itemSelector: 'article, .post, .entry',
-    titleSelector: 'h2, h3, .entry-title',
+    titleSelector: 'h2, h3',
     linkSelector: 'a',
     descSelector: 'p',
     defaultCategory: 'drogi',
@@ -56,6 +45,12 @@ async function fetchOne(source) {
       }
 
       const description = $el.find(source.descSelector).first().text().trim().slice(0, 400);
+
+      // Pomijamy wpisy bez opisu - to zwykle nawigacja/naglowek strony
+      // zlapany przez zbyt szeroki selektor, a nie prawdziwe zgloszenie
+      // utrudnienia. Prawdziwe wpisy zawsze maja jakis opis.
+      if (!description) return;
+
       const text = `${title} ${description}`;
 
       results.push({
