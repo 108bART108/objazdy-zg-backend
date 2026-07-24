@@ -1,0 +1,13 @@
+services:
+  objazdy-api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - objazdy-data:/app/data
+    env_file:
+      - .env
+
+volumes:
+  objazdy-data:

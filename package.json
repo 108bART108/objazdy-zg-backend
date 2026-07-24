@@ -1,0 +1,25 @@
+{
+  "name": "objazdy-zg-backend",
+  "version": "1.0.0",
+  "description": "Backend agregujacy utrudnienia drogowe dla aplikacji Objazdy ZG (Zielona Gora)",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "scrape:once": "node scrapeOnce.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "node-cron": "^3.0.3",
+    "rss-parser": "^3.13.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
