@@ -1,5 +1,5 @@
-const MZK_WORDS = ['mzk', 'autobus', 'linii nr', 'linia nr', 'przystan', 'komunikacj'];
-const WODOCIAGI_WORDS = ['wodoci', 'awaria sieci', 'kanalizacj', 'zwik'];
+const MZK_WORDS = ['mzk', 'autobus', 'linii nr', 'linia nr', 'przystan', 'trolejbus', 'tramwaj', 'rozkład jazdy'];
+const WODOCIAGI_WORDS = ['wodoci', 'awaria sieci wodociągowej', 'awaria sieci wodoc', 'awaria wody', 'brak wody', 'kanalizacj', 'zwik'];
 
 function detectCategory(text) {
   const lower = text.toLowerCase();
