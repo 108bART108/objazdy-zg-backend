@@ -1,15 +1,19 @@
 const { fetchUmZgora } = require('./umZgora');
 const { fetchHtmlSources } = require('./htmlSources');
+const { fetchEnea } = require('./enea');
+const { fetchMzk } = require('./mzk');
 const { upsertMany } = require('./db');
 
 async function scrapeAll() {
   const started = Date.now();
-  const [fromRss, fromHtml] = await Promise.all([
+  const [fromRss, fromHtml, fromEnea, fromMzk] = await Promise.all([
     fetchUmZgora(),
     fetchHtmlSources(),
+    fetchEnea(),
+    fetchMzk(),
   ]);
 
-  const items = [...fromRss, ...fromHtml].filter((i) => i.title && i.source_url);
+  const items = [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk].filter((i) => i.title && i.source_url);
   const count = upsertMany(items);
 
   const ms = Date.now() - started;
