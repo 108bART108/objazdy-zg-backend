@@ -1,4 +1,5 @@
 const cheerio = require('cheerio');
+const crypto = require('crypto');
 const { extractStreet } = require('./classify');
 
 // Strona Enea Operator (Rejon Dystrybucji Zielona Gora) nie ma osobnych linkow
@@ -40,8 +41,16 @@ async function fetchEnea() {
       // Pomijamy wpisy bez opisu - to samo zabezpieczenie co w htmlSources.js
       if (!description) return;
 
+      // Strona Enea nie ma osobnych linkow do kazdego wylaczenia - wszystkie
+      // wpisy wskazywalyby na ten sam adres URL. Baza danych wymaga jednak,
+      // zeby source_url byl unikalny (inaczej kolejne wpisy nadpisywalyby
+      // poprzednie). Dopisujemy wiec do adresu "kotwice" wyliczona ze skrotu
+      // tresci wpisu - stabilna dla tego samego wylaczenia miedzy kolejnymi
+      // scrapowaniami, ale rozna dla roznych wpisow.
+      const hash = crypto.createHash('md5').update(title + description).digest('hex').slice(0, 10);
+
       results.push({
-        source_url: URL,
+        source_url: `${URL}#${hash}`,
         source_name: 'Enea Operator - wyłączenia prądu',
         category: 'prad',
         title,
