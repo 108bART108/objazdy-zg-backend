@@ -4,21 +4,21 @@ const { extractStreet } = require('./classify');
 // Strona z lista aktualnosci MZK nie pokazuje opisow/zajawek artykulow
 // (tylko miniature + data + tytul), wiec generyczny mechanizm z htmlSources.js
 // (ktory wymaga opisu) pomijalby tu wszystko. Dlatego osobny scraper:
-// znajdujemy prawdziwe artykuly po charakterystycznym wzorcu adresu URL
+// znajdujemy prawdziwe artykuly po charakterystycznym wzorcu adresu PAGE_URL
 // (koncowka "-iNNN", np. /aktualnosci/objazd-ul-poznanskiej-i1005),
 // a jako opis uzywamy tytulu (pelna tresc jest tylko na podstronie artykulu).
-const URL = 'https://www.mzk.zgora.pl/aktualnosci';
+const PAGE_URL = 'https://www.mzk.zgora.pl/aktualnosci';
 
 async function fetchMzk() {
   const results = [];
   try {
-    const res = await fetch(URL, {
+    const res = await fetch(PAGE_URL, {
       headers: { 'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)' },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
     const $ = cheerio.load(html);
-    const base = new URL(URL).origin;
+    const base = new URL(PAGE_URL).origin;
     const seen = new Set();
 
     $('a[href*="/aktualnosci/"]').each((_, el) => {
