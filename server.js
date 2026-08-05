@@ -7,6 +7,7 @@ const cron = require('node-cron');
 const { listUtrudnienia, db, saveSubscription, deleteSubscription } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact } = require('./ciekawostka');
+const { notifySubscribers } = require('./push');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -90,6 +91,29 @@ app.post('/api/admin/refresh', async (req, res) => {
   try {
     const count = await scrapeAll();
     res.json({ ok: true, count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Testowe powiadomienie - wysyla jedno, sztuczne "nowe" powiadomienie do
+// wszystkich subskrybentow kategorii "drogi", zeby sprawdzic czy cala sciezka
+// (VAPID, subskrypcja, Service Worker) faktycznie dziala, bez czekania na
+// prawdziwy nowy wpis.
+app.post('/api/admin/test-push', async (req, res) => {
+  const adminKey = req.header('x-admin-key');
+  if (!process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
+    return res.status(403).json({ error: 'brak dostepu' });
+  }
+  try {
+    await notifySubscribers([{
+      category: 'drogi',
+      street: 'Test powiadomien',
+      title: 'Test powiadomien',
+      description: 'To jest testowe powiadomienie z appki Utrudnienia ZG. Jesli to widzisz, wszystko dziala poprawnie!',
+      source_url: 'https://objazdy-zg-frontend.onrender.com',
+    }]);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
