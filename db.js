@@ -1,7 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'objazdy.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'objazdy.db');
 
 require('fs').mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
@@ -29,7 +29,13 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     endpoint TEXT UNIQUE NOT NULL,
     subscription_json TEXT NOT NULL,
-    is_premium INTEGER NOT NULL DEFAULT 0,
+    categories TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS daily_fact (
+    fact_date TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
@@ -45,12 +51,23 @@ const upsertStmt = db.prepare(`
     active = 1
 `);
 
+const existsStmt = db.prepare('SELECT 1 FROM utrudnienia WHERE source_url = ?');
+
+// Zwraca { count, newItems } - newItems to tylko te wpisy, ktorych source_url
+// NIE bylo wczesniej w bazie (czyli faktycznie nowe, a nie tylko odswiezone).
+// Uzywane do wysylki powiadomien push - powiadamiamy tylko o prawdziwych
+// nowosciach, nie o kazdej aktualizacji istniejacego wpisu.
 function upsertMany(items) {
+  const newItems = [];
   const tx = db.transaction((rows) => {
-    for (const row of rows) upsertStmt.run(row);
+    for (const row of rows) {
+      const alreadyExists = existsStmt.get(row.source_url);
+      if (!alreadyExists) newItems.push(row);
+      upsertStmt.run(row);
+    }
   });
   tx(items);
-  return items.length;
+  return { count: items.length, newItems };
 }
 
 function listUtrudnienia({ category, search, limit = 50 } = {}) {
@@ -71,4 +88,51 @@ function listUtrudnienia({ category, search, limit = 50 } = {}) {
   return db.prepare(query).all(params);
 }
 
-module.exports = { db, upsertMany, listUtrudnienia };
+function getDailyFact(date) {
+  return db.prepare('SELECT * FROM daily_fact WHERE fact_date = ?').get(date);
+}
+
+function saveDailyFact(date, content) {
+  db.prepare(`
+    INSERT INTO daily_fact (fact_date, content) VALUES (@date, @content)
+    ON CONFLICT(fact_date) DO UPDATE SET content = excluded.content
+  `).run({ date, content });
+}
+
+function getRecentFacts(limit = 20) {
+  return db.prepare('SELECT content FROM daily_fact ORDER BY fact_date DESC LIMIT ?')
+    .all(limit)
+    .map((r) => r.content);
+}
+
+// --- Subskrypcje powiadomien push ---
+
+function saveSubscription(endpoint, subscriptionJson, categories) {
+  db.prepare(`
+    INSERT INTO push_subscriptions (endpoint, subscription_json, categories)
+    VALUES (@endpoint, @subscription_json, @categories)
+    ON CONFLICT(endpoint) DO UPDATE SET
+      subscription_json = excluded.subscription_json,
+      categories = excluded.categories
+  `).run({ endpoint, subscription_json: subscriptionJson, categories });
+}
+
+function deleteSubscription(endpoint) {
+  db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+}
+
+function getAllSubscriptions() {
+  return db.prepare('SELECT * FROM push_subscriptions').all();
+}
+
+module.exports = {
+  db,
+  upsertMany,
+  listUtrudnienia,
+  getDailyFact,
+  saveDailyFact,
+  getRecentFacts,
+  saveSubscription,
+  deleteSubscription,
+  getAllSubscriptions,
+};

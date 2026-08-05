@@ -4,8 +4,9 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const cron = require('node-cron');
 
-const { listUtrudnienia, db } = require('./db');
+const { listUtrudnienia, db, saveSubscription, deleteSubscription } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
+const { getTodayFact } = require('./ciekawostka');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,21 +37,47 @@ app.get('/api/utrudnienia', (req, res) => {
   res.json({ count: items.length, items });
 });
 
-// Rejestracja subskrypcji push (uproszczone - do podpiecia pod Web Push / FCM)
+// GET /api/ciekawostka - jedna nowa ciekawostka dziennie, generowana przez
+// Claude i zapamietywana w bazie, zeby nie generowac jej ponownie przy
+// kazdym zapytaniu tego samego dnia.
+app.get('/api/ciekawostka', async (_req, res) => {
+  try {
+    const fact = await getTodayFact();
+    res.json(fact);
+  } catch (err) {
+    console.error('[ciekawostka] blad generowania:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/push/vapid-public-key - frontend pobiera klucz publiczny stad,
+// zeby nie trzeba bylo go wklejac na sztywno do kodu appki.
+app.get('/api/push/vapid-public-key', (_req, res) => {
+  if (!process.env.VAPID_PUBLIC_KEY) {
+    return res.status(503).json({ error: 'Powiadomienia push nie sa jeszcze skonfigurowane' });
+  }
+  res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
+});
+
+// Rejestracja/aktualizacja subskrypcji push wraz z wybranymi kategoriami.
+// categories: tablica np. ["drogi","prad"], albo pusta tablica = wszystkie kategorie.
 app.post('/api/push/subscribe', (req, res) => {
-  const { endpoint, subscription, isPremium } = req.body || {};
+  const { endpoint, subscription, categories } = req.body || {};
   if (!endpoint || !subscription) {
     return res.status(400).json({ error: 'brak endpoint lub subscription' });
   }
-  db.prepare(
-    `INSERT INTO push_subscriptions (endpoint, subscription_json, is_premium)
-     VALUES (@endpoint, @subscription_json, @is_premium)
-     ON CONFLICT(endpoint) DO UPDATE SET is_premium = @is_premium`
-  ).run({
-    endpoint,
-    subscription_json: JSON.stringify(subscription),
-    is_premium: isPremium ? 1 : 0,
-  });
+  const categoriesStr = Array.isArray(categories) ? categories.join(',') : '';
+  saveSubscription(endpoint, JSON.stringify(subscription), categoriesStr);
+  res.json({ ok: true });
+});
+
+// Wypisanie sie z powiadomien
+app.post('/api/push/unsubscribe', (req, res) => {
+  const { endpoint } = req.body || {};
+  if (!endpoint) {
+    return res.status(400).json({ error: 'brak endpoint' });
+  }
+  deleteSubscription(endpoint);
   res.json({ ok: true });
 });
 

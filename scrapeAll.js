@@ -3,6 +3,7 @@ const { fetchHtmlSources } = require('./htmlSources');
 const { fetchEnea } = require('./enea');
 const { fetchMzk } = require('./mzk');
 const { upsertMany } = require('./db');
+const { notifySubscribers } = require('./push');
 
 async function scrapeAll() {
   const started = Date.now();
@@ -14,10 +15,15 @@ async function scrapeAll() {
   ]);
 
   const items = [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk].filter((i) => i.title && i.source_url);
-  const count = upsertMany(items);
+  const { count, newItems } = upsertMany(items);
 
   const ms = Date.now() - started;
-  console.log(`[scrapeAll] zapisano/zaktualizowano ${count} wpisow w ${ms}ms`);
+  console.log(`[scrapeAll] zapisano/zaktualizowano ${count} wpisow w ${ms}ms (nowych: ${newItems.length})`);
+
+  if (newItems.length) {
+    notifySubscribers(newItems).catch((err) => console.error('[push] blad wysylki powiadomien:', err.message));
+  }
+
   return count;
 }
 
