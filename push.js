@@ -22,8 +22,10 @@ async function notifySubscribers(newItems) {
   }
 
   const subs = getAllSubscriptions();
+  console.log(`[push] ${newItems.length} nowych wpisow, ${subs.length} zarejestrowanych subskrybentow`);
   if (!subs.length) return;
 
+  let sent = 0;
   for (const sub of subs) {
     const prefCategories = sub.categories ? sub.categories.split(',').filter(Boolean) : [];
     const matched = newItems.filter(
@@ -43,6 +45,7 @@ async function notifySubscribers(newItems) {
 
     try {
       await webpush.sendNotification(JSON.parse(sub.subscription_json), payload);
+      sent++;
     } catch (err) {
       console.error(`[push] blad wysylki (${sub.endpoint.slice(0, 40)}...):`, err.statusCode || err.message);
       if (err.statusCode === 404 || err.statusCode === 410) {
@@ -51,6 +54,7 @@ async function notifySubscribers(newItems) {
       }
     }
   }
+  console.log(`[push] wyslano ${sent}/${subs.length} powiadomien`);
 }
 
 module.exports = { notifySubscribers };
