@@ -11,15 +11,6 @@ const SOURCES = [
     descSelector: 'p',
     defaultCategory: 'drogi',
   },
-  {
-    name: 'ZWiK Zielona Gora',
-    url: 'https://www.zwik.zgora.pl/aktualnosci/awarie-i-remonty/',
-    itemSelector: 'article, .post, .entry',
-    titleSelector: 'h2, h3',
-    linkSelector: 'a',
-    descSelector: 'p',
-    defaultCategory: 'wodociagi',
-  },
 ];
 
 async function fetchOne(source) {
