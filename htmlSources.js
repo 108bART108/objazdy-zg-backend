@@ -1,17 +1,12 @@
 const cheerio = require('cheerio');
 const { detectCategory, extractStreet } = require('./classify');
 
-const SOURCES = [
-  {
-    name: 'ZDW Zielona Gora',
-    url: 'https://www.zdw.zgora.pl/utrudnienia/',
-    itemSelector: 'article, .post, .entry',
-    titleSelector: 'h2, h3',
-    linkSelector: 'a',
-    descSelector: 'p',
-    defaultCategory: 'drogi',
-  },
-];
+// Generyczny mechanizm - obecnie bez zadnego zrodla. ZDW i MZK maja teraz
+// wlasne, dedykowane scrapery (zdw.js, mzk.js) dopasowane do ich
+// nietypowej struktury stron. Ten plik zostaje w gotowosci na przyszlosc,
+// gdyby pojawilo sie nowe zrodlo o standardowej budowie WordPress
+// (article/.post/.entry).
+const SOURCES = [];
 
 async function fetchOne(source) {
   const results = [];
