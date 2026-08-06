@@ -46,7 +46,13 @@ async function fetchZwik() {
         $next = $next.next();
         guard++;
       }
-      const description = parts.join(' ').trim().slice(0, 400);
+      const description = parts.join(' ')
+        .replace(/Awarie i remonty/gi, '')
+        .replace(/Czytaj więcej/gi, '')
+        .replace(/^\s*(Dzisiaj|Wczoraj|\d{1,2}\s+\p{L}+)\s+o\s+\d{2}:\d{2}\s*/iu, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 400);
       if (!description) return;
 
       results.push({
