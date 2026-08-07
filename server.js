@@ -6,7 +6,7 @@ const cron = require('node-cron');
 
 const {
   listUtrudnienia, db, saveSubscription, deleteSubscription,
-  listActiveAds, createAd, deactivateAd, listAllAds,
+  listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact } = require('./ciekawostka');
@@ -95,12 +95,23 @@ app.get('/api/ads', (_req, res) => {
 // Dodanie nowej reklamy (chronione ADMIN_KEY)
 app.post('/api/admin/ads', (req, res) => {
   if (!checkAdmin(req, res)) return;
-  const { business_name, tagline, link_url } = req.body || {};
+  const { business_name, tagline, link_url, image_url } = req.body || {};
   if (!business_name || !tagline || !link_url) {
     return res.status(400).json({ error: 'wymagane: business_name, tagline, link_url' });
   }
-  const id = createAd({ business_name, tagline, link_url });
+  const id = createAd({ business_name, tagline, link_url, image_url });
   res.json({ ok: true, id });
+});
+
+// Edycja istniejacej reklamy (chronione ADMIN_KEY)
+app.post('/api/admin/ads/:id', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const { business_name, tagline, link_url, image_url } = req.body || {};
+  if (!business_name || !tagline || !link_url) {
+    return res.status(400).json({ error: 'wymagane: business_name, tagline, link_url' });
+  }
+  updateAd(Number(req.params.id), { business_name, tagline, link_url, image_url });
+  res.json({ ok: true });
 });
 
 // Lista wszystkich reklam (aktywnych i wylaczonych) - do podgladu w adminie

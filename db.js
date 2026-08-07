@@ -49,6 +49,15 @@ db.exec(`
   );
 `);
 
+// Migracja: dodaj kolumne image_url, jesli tabela zostala juz utworzona
+// wczesniej (przed dodaniem tej funkcji) i jeszcze jej nie ma. ALTER TABLE
+// rzuca blad, jesli kolumna juz istnieje - ignorujemy to bezpiecznie.
+try {
+  db.exec('ALTER TABLE local_ads ADD COLUMN image_url TEXT');
+} catch (err) {
+  // kolumna juz istnieje - nic nie robimy
+}
+
 const upsertStmt = db.prepare(`
   INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at)
   VALUES (@source_url, @source_name, @category, @title, @street, @description, @published_at)
@@ -136,11 +145,23 @@ function listActiveAds() {
   return db.prepare('SELECT * FROM local_ads WHERE active = 1 ORDER BY id DESC').all();
 }
 
-function createAd({ business_name, tagline, link_url }) {
+function createAd({ business_name, tagline, link_url, image_url }) {
   const info = db.prepare(`
-    INSERT INTO local_ads (business_name, tagline, link_url) VALUES (@business_name, @tagline, @link_url)
-  `).run({ business_name, tagline, link_url });
+    INSERT INTO local_ads (business_name, tagline, link_url, image_url)
+    VALUES (@business_name, @tagline, @link_url, @image_url)
+  `).run({ business_name, tagline, link_url, image_url: image_url || null });
   return info.lastInsertRowid;
+}
+
+function updateAd(id, { business_name, tagline, link_url, image_url }) {
+  db.prepare(`
+    UPDATE local_ads
+    SET business_name = @business_name,
+        tagline = @tagline,
+        link_url = @link_url,
+        image_url = @image_url
+    WHERE id = @id
+  `).run({ id, business_name, tagline, link_url, image_url: image_url || null });
 }
 
 function deactivateAd(id) {
@@ -163,6 +184,7 @@ module.exports = {
   getAllSubscriptions,
   listActiveAds,
   createAd,
+  updateAd,
   deactivateAd,
   listAllAds,
 };
