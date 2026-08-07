@@ -38,6 +38,15 @@ db.exec(`
     content TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS local_ads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_name TEXT NOT NULL,
+    tagline TEXT NOT NULL,
+    link_url TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 const upsertStmt = db.prepare(`
@@ -53,10 +62,6 @@ const upsertStmt = db.prepare(`
 
 const existsStmt = db.prepare('SELECT 1 FROM utrudnienia WHERE source_url = ?');
 
-// Zwraca { count, newItems } - newItems to tylko te wpisy, ktorych source_url
-// NIE bylo wczesniej w bazie (czyli faktycznie nowe, a nie tylko odswiezone).
-// Uzywane do wysylki powiadomien push - powiadamiamy tylko o prawdziwych
-// nowosciach, nie o kazdej aktualizacji istniejacego wpisu.
 function upsertMany(items) {
   const newItems = [];
   const tx = db.transaction((rows) => {
@@ -125,6 +130,27 @@ function getAllSubscriptions() {
   return db.prepare('SELECT * FROM push_subscriptions').all();
 }
 
+// --- Reklamy lokalnych firm ---
+
+function listActiveAds() {
+  return db.prepare('SELECT * FROM local_ads WHERE active = 1 ORDER BY id DESC').all();
+}
+
+function createAd({ business_name, tagline, link_url }) {
+  const info = db.prepare(`
+    INSERT INTO local_ads (business_name, tagline, link_url) VALUES (@business_name, @tagline, @link_url)
+  `).run({ business_name, tagline, link_url });
+  return info.lastInsertRowid;
+}
+
+function deactivateAd(id) {
+  db.prepare('UPDATE local_ads SET active = 0 WHERE id = ?').run(id);
+}
+
+function listAllAds() {
+  return db.prepare('SELECT * FROM local_ads ORDER BY id DESC').all();
+}
+
 module.exports = {
   db,
   upsertMany,
@@ -135,4 +161,8 @@ module.exports = {
   saveSubscription,
   deleteSubscription,
   getAllSubscriptions,
+  listActiveAds,
+  createAd,
+  deactivateAd,
+  listAllAds,
 };
