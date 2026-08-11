@@ -3,12 +3,16 @@ const crypto = require('crypto');
 const { extractStreet } = require('./classify');
 
 // Strona ZDW ma wpisy w formie naglowek (h3) + cztery pola etykieta-wartosc:
-// "relacja:", "od dnia:", "do dnia:", "opis:". Generyczny scraper braby
-// pierwszy napotkany akapit jako opis, czyli najczesciej pole "relacja:",
-// a nie prawdziwy opis prac. Dodatkowo WSZYSTKIE wpisy linkuja do tego
-// samego adresu (mapa interaktywna zud.zdw.zgora.pl), wiec potrzebujemy
-// sztucznego, unikalnego source_url (tak jak przy Enea), inaczej kolejne
-// wpisy nadpisywalyby sie nawzajem w bazie.
+// "relacja:", "od dnia:", "do dnia:", "opis:". Uzywamy WYLACZNIE pola
+// "opis:" jako opisu - to najbardziej niezawodne, czytelne pole. Wczesniej
+// probowalismy dodatkowo doklejac "relacje" jako kontekst w nawiasie, ale
+// dla niektorych wpisow ta dodatkowa logika lapala za duzo tekstu i
+// powodowala zdublowanie tresci - stad uproszczenie.
+//
+// WSZYSTKIE wpisy linkuja do tego samego adresu (mapa interaktywna
+// zud.zdw.zgora.pl), wiec potrzebujemy sztucznego, unikalnego source_url
+// (tak jak przy Enea), inaczej kolejne wpisy nadpisywalyby sie nawzajem
+// w bazie.
 const PAGE_URL = 'https://www.zdw.zgora.pl/utrudnienia/';
 
 async function fetchZdw() {
@@ -26,8 +30,6 @@ async function fetchZdw() {
       const title = $h3.text().replace(/\s+/g, ' ').trim();
       if (!title) return;
 
-      const linkHref = $h3.find('a[href]').first().attr('href') || PAGE_URL;
-
       // Zbieramy tekst kolejnych elementow siostrzanych (pola relacja/od
       // dnia/do dnia/opis), az do kolejnego naglowka h3.
       const parts = [];
@@ -41,17 +43,12 @@ async function fetchZdw() {
       }
       const fullText = parts.join(' | ');
 
-      // Wyciagamy konkretnie tresc pola "opis:" - to jest prawdziwy,
-      // czytelny opis prac, a nie same dane techniczne (relacja/daty).
-      const opisMatch = fullText.match(/opis:\s*\|?\s*(.+?)(?:\s*\|\s*(?:relacja|od dnia|do dnia):|$)/i);
+      // Wyciagamy WYLACZNIE tresc pola "opis:" - najbardziej niezawodne,
+      // czytelne pole z realnym opisem prac.
+      const opisMatch = fullText.match(/opis:\s*\|?\s*(.+)$/i);
       let description = opisMatch ? opisMatch[1] : fullText;
       description = description.replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
       if (!description) return;
-
-      // Dodajemy kontekst trasy (relacja) na poczatku opisu, jesli go znalezlismy
-      const relacjaMatch = fullText.match(/relacja:\s*\|?\s*(.+?)(?:\s*\|\s*(?:od dnia|do dnia|opis):|$)/i);
-      const relacja = relacjaMatch ? relacjaMatch[1].replace(/\s*\|\s*/g, ' ').trim() : '';
-      const fullDescription = relacja ? `[${relacja}] ${description}` : description;
 
       const hash = crypto.createHash('md5').update(title + fullText).digest('hex').slice(0, 10);
 
@@ -60,8 +57,8 @@ async function fetchZdw() {
         source_name: 'ZDW Zielona Gora',
         category: 'drogi',
         title,
-        street: extractStreet(fullDescription) || extractStreet(title),
-        description: fullDescription.slice(0, 400),
+        street: extractStreet(description) || extractStreet(title),
+        description,
         published_at: new Date().toISOString(),
       });
     });
