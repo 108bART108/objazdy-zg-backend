@@ -11,6 +11,7 @@ const {
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact } = require('./ciekawostka');
 const { notifySubscribers } = require('./push');
+const { runWeeklyHealthCheck } = require('./healthcheck');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -87,40 +88,35 @@ app.post('/api/push/unsubscribe', (req, res) => {
 
 // --- Reklamy lokalnych firm ---
 
-// Publiczny endpoint - frontend pobiera stad aktywne reklamy do wyswietlenia
 app.get('/api/ads', (_req, res) => {
   res.json({ items: listActiveAds() });
 });
 
-// Dodanie nowej reklamy (chronione ADMIN_KEY)
 app.post('/api/admin/ads', (req, res) => {
   if (!checkAdmin(req, res)) return;
-  const { business_name, tagline, link_url, image_url } = req.body || {};
+  const { business_name, tagline, link_url } = req.body || {};
   if (!business_name || !tagline || !link_url) {
     return res.status(400).json({ error: 'wymagane: business_name, tagline, link_url' });
   }
-  const id = createAd({ business_name, tagline, link_url, image_url });
+  const id = createAd({ business_name, tagline, link_url });
   res.json({ ok: true, id });
 });
 
-// Edycja istniejacej reklamy (chronione ADMIN_KEY)
 app.post('/api/admin/ads/:id', (req, res) => {
   if (!checkAdmin(req, res)) return;
-  const { business_name, tagline, link_url, image_url } = req.body || {};
+  const { business_name, tagline, link_url } = req.body || {};
   if (!business_name || !tagline || !link_url) {
     return res.status(400).json({ error: 'wymagane: business_name, tagline, link_url' });
   }
-  updateAd(Number(req.params.id), { business_name, tagline, link_url, image_url });
+  updateAd(Number(req.params.id), { business_name, tagline, link_url });
   res.json({ ok: true });
 });
 
-// Lista wszystkich reklam (aktywnych i wylaczonych) - do podgladu w adminie
 app.get('/api/admin/ads', (req, res) => {
   if (!checkAdmin(req, res)) return;
   res.json({ items: listAllAds() });
 });
 
-// Wylaczenie reklamy (np. po wygasnieciu oplaty klienta)
 app.post('/api/admin/ads/:id/deactivate', (req, res) => {
   if (!checkAdmin(req, res)) return;
   deactivateAd(Number(req.params.id));
@@ -153,6 +149,17 @@ app.post('/api/admin/test-push', async (req, res) => {
   }
 });
 
+// Recznie wywolany przeglad "zdrowia" appki (nie trzeba czekac do poniedzialku)
+app.post('/api/admin/healthcheck', async (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  try {
+    await runWeeklyHealthCheck();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Objazdy ZG API dziala na porcie ${PORT}`);
 });
@@ -160,6 +167,12 @@ app.listen(PORT, () => {
 cron.schedule('*/30 * * * *', () => {
   console.log('[cron] uruchamiam scrapeAll...');
   scrapeAll().catch((err) => console.error('[cron] blad:', err));
+});
+
+// Cotygodniowy automatyczny przeglad - kazdy poniedzialek o 9:00 (czasu serwera)
+cron.schedule('0 9 * * 1', () => {
+  console.log('[cron] uruchamiam cotygodniowy przeglad...');
+  runWeeklyHealthCheck().catch((err) => console.error('[cron] blad przegladu:', err));
 });
 
 scrapeAll().catch((err) => console.error('[start] blad pierwszego scrapowania:', err));
