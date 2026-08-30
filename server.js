@@ -14,6 +14,14 @@ const { notifySubscribers } = require('./push');
 const { runWeeklyHealthCheck } = require('./healthcheck');
 
 const app = express();
+
+// Render stoi za wlasnym serwerem posredniczacym (reverse proxy), ktory
+// dodaje naglowek X-Forwarded-For z prawdziwym adresem IP uzytkownika.
+// Bez tej linijki Express nie ufa temu naglowkowi, co powodowalo powtarzajacy
+// sie blad walidacji w express-rate-limit i mogloby prowadzic do
+// nieprawidlowego liczenia limitu zapytan (wszyscy uzytkownicy dzieleni
+// jednym, wspolnym limitem zamiast osobnym per-IP).
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
