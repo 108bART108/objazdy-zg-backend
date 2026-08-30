@@ -49,9 +49,6 @@ db.exec(`
   );
 `);
 
-// Migracje: dodaj kolumny, jesli tabela zostala utworzona wczesniej (przed
-// dodaniem tych funkcji) i jeszcze ich nie ma. ALTER TABLE rzuca blad, jesli
-// kolumna juz istnieje - ignorujemy to bezpiecznie.
 const migrations = [
   'ALTER TABLE local_ads ADD COLUMN expires_at TEXT',
   'ALTER TABLE local_ads ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0',
@@ -60,14 +57,26 @@ for (const sql of migrations) {
   try { db.exec(sql); } catch (err) { /* kolumna juz istnieje */ }
 }
 
+// WAZNE: published_at uzywa COALESCE w dwoch miejscach - to jest mechanizm
+// "samoleczacy" zapobiegajacy powrotowi bledu "data = moment scrapowania":
+//  - Przy NOWYM wpisie (INSERT): jesli scraper nie podal pewnej daty
+//    (published_at = null), uzywamy biezacej daty jako jedynego rozsadnego
+//    przyblizenia (pierwszy raz widzimy ten wpis, wiec to najlepsze co
+//    mamy).
+//  - Przy JUZ ISTNIEJACYM wpisie (UPDATE): jesli scraper w tym przebiegu
+//    NIE podal pewnej daty, zachowujemy date, ktora JUZ byla zapisana w
+//    bazie, zamiast ja nadpisywac domyslnym "teraz". Dzieki temu nawet
+//    jesli parsowanie daty w ktoryms scraperze znowu kiedys zawiedzie,
+//    appka nie zacznie znowu pokazywac wszystkim wpisom dzisiejszej daty -
+//    po prostu zachowa ostatnia znana, dobra wartosc.
 const upsertStmt = db.prepare(`
   INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at)
-  VALUES (@source_url, @source_name, @category, @title, @street, @description, @published_at)
+  VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, datetime('now')))
   ON CONFLICT(source_url) DO UPDATE SET
     title = excluded.title,
     street = excluded.street,
     description = excluded.description,
-    published_at = excluded.published_at,
+    published_at = COALESCE(@published_at, utrudnienia.published_at),
     active = 1
 `);
 
@@ -79,7 +88,7 @@ function upsertMany(items) {
     for (const row of rows) {
       const alreadyExists = existsStmt.get(row.source_url);
       if (!alreadyExists) newItems.push(row);
-      upsertStmt.run(row);
+      upsertStmt.run({ ...row, published_at: row.published_at || null });
     }
   });
   tx(items);
@@ -121,8 +130,6 @@ function getRecentFacts(limit = 20) {
     .map((r) => r.content);
 }
 
-// --- Subskrypcje powiadomien push ---
-
 function saveSubscription(endpoint, subscriptionJson, categories) {
   db.prepare(`
     INSERT INTO push_subscriptions (endpoint, subscription_json, categories)
@@ -141,10 +148,6 @@ function getAllSubscriptions() {
   return db.prepare('SELECT * FROM push_subscriptions').all();
 }
 
-// --- Reklamy lokalnych firm ---
-
-// Aktywne reklamy do wyswietlenia w appce - tylko te, ktore nie wygasly
-// (expires_at puste = bezterminowa, albo data jeszcze nie minela).
 function listActiveAds() {
   return db.prepare(`
     SELECT * FROM local_ads
@@ -181,8 +184,6 @@ function listAllAds() {
   return db.prepare('SELECT * FROM local_ads ORDER BY id DESC').all();
 }
 
-// Wylacza reklamy, ktorych data wygasniecia juz minela. Zwraca liste
-// wylaczonych reklam (do logow/powiadomienia).
 function deactivateExpiredAds() {
   const expired = db.prepare(`
     SELECT * FROM local_ads
@@ -196,8 +197,6 @@ function deactivateExpiredAds() {
   return expired;
 }
 
-// Reklamy, ktore wygasaja w ciagu najblizszych 7 dni i jeszcze nie
-// wyslalismy dla nich przypomnienia.
 function getAdsNeedingReminder() {
   return db.prepare(`
     SELECT * FROM local_ads

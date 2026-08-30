@@ -1,11 +1,6 @@
 const cheerio = require('cheerio');
 const { extractStreet } = require('./classify');
 
-// Strona ZWiK jest zbudowana w WPBakery Page Builder, ktory nie uzywa
-// standardowych znacznikow <article>/.post/.entry. Identyfikujemy wpisy po
-// charakterystycznym wzorcu adresu URL (data-permalink WordPressa:
-// /RRRR/MM/nazwa-wpisu/), a opis zbieramy z tekstu wystepujacego zaraz po
-// tytule (h2), az do kolejnego naglowka h2.
 const PAGE_URL = 'https://www.zwik.zgora.pl/aktualnosci/awarie-i-remonty/';
 const PERMALINK_RE = /^https?:\/\/www\.zwik\.zgora\.pl\/\d{4}\/\d{2}\/[a-z0-9-]+\/?$/i;
 const NOISE_TEXTS = ['czytaj więcej', 'awarie i remonty', 'strona główna'];
@@ -15,10 +10,6 @@ const MONTH_ABBR = {
   lip: 6, sie: 7, wrz: 8, paz: 9, paź: 9, lis: 10, gru: 11,
 };
 
-// Strona ZWiK poprzedza kazdy wpis wzgledna data typu "Dzisiaj o 07:44",
-// "Wczoraj o 09:12" albo "30 lip o 09:44" - wyciagamy z tego prawdziwa
-// date wpisu, zamiast (jak wczesniej) po prostu ja wycinac i zastepowac
-// data scrapowania.
 function parseRelativeDate(text, now) {
   let m = text.match(/^Dzisiaj\s+o\s+(\d{2}):(\d{2})/i);
   if (m) {
@@ -83,9 +74,10 @@ async function fetchZwik() {
       }
       const rawText = parts.join(' ');
 
-      // Wyciagamy prawdziwa date z poczatku tekstu (przed usunieciem jej
-      // jako "szumu"), zeby appka pokazywala faktyczna date publikacji,
-      // a nie date scrapowania.
+      // Jesli nie uda sie rozpoznac daty - przekazujemy null (nie "teraz"!).
+      // Baza danych sama zdecyduje: dla nowego wpisu uzyje dzisiejszej daty
+      // jako jedynego rozsadnego przyblizenia, a dla juz istniejacego wpisu
+      // ZACHOWA poprzednio zapisana, dobra date zamiast ja nadpisywac.
       const parsedDate = parseRelativeDate(rawText, now);
 
       const description = rawText
@@ -104,7 +96,7 @@ async function fetchZwik() {
         title,
         street: extractStreet(description) || extractStreet(title),
         description,
-        published_at: (parsedDate || now).toISOString(),
+        published_at: parsedDate ? parsedDate.toISOString() : null,
       });
     });
   } catch (err) {

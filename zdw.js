@@ -2,15 +2,6 @@ const cheerio = require('cheerio');
 const crypto = require('crypto');
 const { extractStreet } = require('./classify');
 
-// Strona ZDW ma wpisy w formie naglowek (h3) + cztery pola etykieta-wartosc:
-// "relacja:", "od dnia:", "do dnia:", "opis:". Uzywamy pola "opis:" jako
-// tresci, a pola "od dnia:" jako prawdziwej daty wpisu - zamiast (jak
-// wczesniej) znaczyc kazdy wpis data scrapowania, co myllo czytelnikow
-// sugerujac, ze to swiezy wpis, mimo ze prace trwaja od tygodni.
-//
-// WSZYSTKIE wpisy linkuja do tego samego adresu (mapa interaktywna
-// zud.zdw.zgora.pl), wiec potrzebujemy sztucznego, unikalnego source_url,
-// inaczej kolejne wpisy nadpisywalyby sie nawzajem w bazie.
 const PAGE_URL = 'https://www.zdw.zgora.pl/utrudnienia/';
 
 async function fetchZdw() {
@@ -44,13 +35,10 @@ async function fetchZdw() {
       description = description.replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
       if (!description) return;
 
-      // Prawdziwa data wpisu: pole "od dnia:" (poczatek prac/utrudnienia),
-      // w formacie RRRR-MM-DD [HH:MM:SS]. Jesli nie znajdziemy - awaryjnie
-      // uzywamy daty scrapowania.
+      // Jesli nie uda sie znalezc pola "od dnia:" - przekazujemy null
+      // (nie date scrapowania). Baza sama zdecyduje jak to obsluzyc.
       const odDniaMatch = fullText.match(/od dnia:\s*\|?\s*(\d{4}-\d{2}-\d{2})/i);
-      const publishedAt = odDniaMatch
-        ? new Date(`${odDniaMatch[1]}T00:00:00`).toISOString()
-        : new Date().toISOString();
+      const publishedAt = odDniaMatch ? new Date(`${odDniaMatch[1]}T00:00:00`).toISOString() : null;
 
       const hash = crypto.createHash('md5').update(title + fullText).digest('hex').slice(0, 10);
 

@@ -2,10 +2,6 @@ const cheerio = require('cheerio');
 const crypto = require('crypto');
 const { extractStreet } = require('./classify');
 
-// Strona Enea Operator nie ma osobnych linkow do kazdego wylaczenia -
-// wszystkie wpisy sa na jednej stronie, pogrupowane pod naglowkami
-// "Obszar <nazwa>" (znaczniki <h4>), a pod kazdym naglowkiem nastepuja
-// akapity z data/godzina oraz lista miejscowosci/ulic.
 const URL = 'https://wylaczenia.operator.enea.pl/index.php?rejon=1';
 
 const MONTH_FULL = {
@@ -14,9 +10,6 @@ const MONTH_FULL = {
   listopada: 10, grudnia: 11,
 };
 
-// Wpisy zawieraja pelne polskie daty typu "23 lipca 2026 r." - wyciagamy
-// pierwsza taka date jako prawdziwa date wylaczenia, zamiast (jak wczesniej)
-// znaczyc kazdy wpis data scrapowania.
 function parseFullPolishDate(text) {
   const m = text.match(/(\d{1,2})\s+([a-ząćęłńóśźż]+)\s+(\d{4})/iu);
   if (!m) return null;
@@ -55,6 +48,7 @@ async function fetchEnea() {
       const description = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 400);
       if (!description) return;
 
+      // Jesli nie uda sie znalezc pelnej polskiej daty - przekazujemy null.
       const parsedDate = parseFullPolishDate(description) || parseFullPolishDate(title);
 
       const hash = crypto.createHash('md5').update(title + description).digest('hex').slice(0, 10);
@@ -66,7 +60,7 @@ async function fetchEnea() {
         title,
         street: extractStreet(description) || extractStreet(title),
         description,
-        published_at: (parsedDate || new Date()).toISOString(),
+        published_at: parsedDate ? parsedDate.toISOString() : null,
       });
     });
   } catch (err) {

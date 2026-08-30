@@ -1,16 +1,9 @@
 const cheerio = require('cheerio');
 const { extractStreet } = require('./classify');
 
-// Strona z lista aktualnosci MZK nie pokazuje opisow/zajawek artykulow
-// (tylko miniature + data + tytul), wiec prawdziwy opis trzeba pobrac
-// z podstrony kazdego artykulu osobno. Prawdziwe artykuly rozpoznajemy
-// po charakterystycznej koncowce adresu URL "-iNNN"
-// (np. /aktualnosci/objazd-ul-poznanskiej-i1005).
 const PAGE_URL = 'https://www.mzk.zgora.pl/aktualnosci';
 const HEADERS = { 'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)' };
 
-// Pobiera pierwszy sensowny akapit tresci z podstrony artykulu.
-// Krotkie akapity (np. z informacji o cookies w stopce) pomijamy.
 async function fetchArticleDescription(url) {
   try {
     const res = await fetch(url, { headers: HEADERS });
@@ -44,8 +37,6 @@ async function fetchMzk() {
     $('a[href*="/aktualnosci/"]').each((_, el) => {
       const $a = $(el);
       let href = $a.attr('href') || '';
-      // Tylko prawdziwe artykuly maja koncowke "-iNNN" w adresie,
-      // linki do samej listy/kategorii jej nie maja.
       if (!/-i\d+\/?$/.test(href)) return;
 
       if (href.startsWith('/')) href = `${base}${href}`;
@@ -55,9 +46,6 @@ async function fetchMzk() {
       const rawText = $a.text().replace(/\s+/g, ' ').trim();
       if (!rawText) return;
 
-      // Tekst linku czesto zawiera zduplikowany tytul + date (np. z alt
-      // obrazka + podpisu), w stylu "Tytul20.07.2026 Tytul". Wyciagamy
-      // czysty tytul i date.
       const dateMatch = rawText.match(/(\d{2})\.(\d{2})\.(\d{4})/);
       let title = rawText;
       if (dateMatch) {
@@ -66,20 +54,19 @@ async function fetchMzk() {
       }
       if (!title) return;
 
-      let published_at = new Date().toISOString();
+      // Jesli nie znajdziemy daty w tekscie linku - przekazujemy null
+      // (nie date scrapowania), zeby baza mogla sama zdecydowac.
+      let publishedAt = null;
       if (dateMatch) {
         const [, dd, mm, yyyy] = dateMatch;
         const d = new Date(`${yyyy}-${mm}-${dd}T12:00:00`);
-        if (!isNaN(d.getTime())) published_at = d.toISOString();
+        if (!isNaN(d.getTime())) publishedAt = d.toISOString();
       }
 
-      articles.push({ href, title, published_at });
+      articles.push({ href, title, publishedAt });
     });
 
-    // Ograniczamy do najnowszych 15 artykulow, zeby nie zalewac serwera
-    // MZK duza liczba zapytan przy kazdym scrapowaniu.
     const limited = articles.slice(0, 15);
-
     const descriptions = await Promise.all(
       limited.map((a) => fetchArticleDescription(a.href))
     );
@@ -93,7 +80,7 @@ async function fetchMzk() {
         title: a.title,
         street: extractStreet(description) || extractStreet(a.title),
         description,
-        published_at: a.published_at,
+        published_at: a.publishedAt,
       });
     });
   } catch (err) {
