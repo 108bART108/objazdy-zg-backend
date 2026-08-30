@@ -15,13 +15,9 @@ const { runWeeklyHealthCheck } = require('./healthcheck');
 
 const app = express();
 
-// Render stoi za wlasnym serwerem posredniczacym (reverse proxy), ktory
-// dodaje naglowek X-Forwarded-For z prawdziwym adresem IP uzytkownika.
-// Bez tej linijki Express nie ufa temu naglowkowi, co powodowalo powtarzajacy
-// sie blad walidacji w express-rate-limit i mogloby prowadzic do
-// nieprawidlowego liczenia limitu zapytan (wszyscy uzytkownicy dzieleni
-// jednym, wspolnym limitem zamiast osobnym per-IP).
+// Render stoi za wlasnym serwerem posredniczacym (reverse proxy).
 app.set('trust proxy', 1);
+
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
@@ -157,7 +153,6 @@ app.post('/api/admin/test-push', async (req, res) => {
   }
 });
 
-// Recznie wywolany przeglad "zdrowia" appki (nie trzeba czekac do poniedzialku)
 app.post('/api/admin/healthcheck', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
@@ -177,10 +172,12 @@ cron.schedule('*/30 * * * *', () => {
   scrapeAll().catch((err) => console.error('[cron] blad:', err));
 });
 
-// Cotygodniowy automatyczny przeglad - kazdy poniedzialek o 9:00 (czasu serwera)
-cron.schedule('0 9 * * 1', () => {
+// Cotygodniowy automatyczny przeglad - kazda niedziela o 15:30 czasu
+// polskiego (Europe/Warsaw). Jawnie podajemy strefe czasowa, bo serwer
+// Render domyslnie dziala w UTC, a nie w czasie polskim.
+cron.schedule('30 15 * * 0', () => {
   console.log('[cron] uruchamiam cotygodniowy przeglad...');
   runWeeklyHealthCheck().catch((err) => console.error('[cron] blad przegladu:', err));
-});
+}, { timezone: 'Europe/Warsaw' });
 
 scrapeAll().catch((err) => console.error('[start] blad pierwszego scrapowania:', err));
