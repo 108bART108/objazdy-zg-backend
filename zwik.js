@@ -1,16 +1,50 @@
 const cheerio = require('cheerio');
 const { extractStreet } = require('./classify');
 
-// Strona ZWiK (Zielonogorskie Wodociagi i Kanalizacja) jest zbudowana w
-// WPBakery Page Builder, ktory nie uzywa standardowych znacznikow
-// <article>/.post/.entry - generyczny scraper z htmlSources.js nic by tu
-// nie znalazl. Zamiast zgadywac niestandardowe klasy CSS, identyfikujemy
-// prawdziwe wpisy po charakterystycznym wzorcu adresu URL (data-permalink
-// WordPressa: /RRRR/MM/nazwa-wpisu/), a opis zbieramy z tekstu wystepujacego
-// zaraz po tytule (h2), az do kolejnego naglowka h2.
+// Strona ZWiK jest zbudowana w WPBakery Page Builder, ktory nie uzywa
+// standardowych znacznikow <article>/.post/.entry. Identyfikujemy wpisy po
+// charakterystycznym wzorcu adresu URL (data-permalink WordPressa:
+// /RRRR/MM/nazwa-wpisu/), a opis zbieramy z tekstu wystepujacego zaraz po
+// tytule (h2), az do kolejnego naglowka h2.
 const PAGE_URL = 'https://www.zwik.zgora.pl/aktualnosci/awarie-i-remonty/';
 const PERMALINK_RE = /^https?:\/\/www\.zwik\.zgora\.pl\/\d{4}\/\d{2}\/[a-z0-9-]+\/?$/i;
 const NOISE_TEXTS = ['czytaj więcej', 'awarie i remonty', 'strona główna'];
+
+const MONTH_ABBR = {
+  sty: 0, lut: 1, mar: 2, kwi: 3, maj: 4, cze: 5,
+  lip: 6, sie: 7, wrz: 8, paz: 9, paź: 9, lis: 10, gru: 11,
+};
+
+// Strona ZWiK poprzedza kazdy wpis wzgledna data typu "Dzisiaj o 07:44",
+// "Wczoraj o 09:12" albo "30 lip o 09:44" - wyciagamy z tego prawdziwa
+// date wpisu, zamiast (jak wczesniej) po prostu ja wycinac i zastepowac
+// data scrapowania.
+function parseRelativeDate(text, now) {
+  let m = text.match(/^Dzisiaj\s+o\s+(\d{2}):(\d{2})/i);
+  if (m) {
+    const d = new Date(now);
+    d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    return d;
+  }
+  m = text.match(/^Wczoraj\s+o\s+(\d{2}):(\d{2})/i);
+  if (m) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - 1);
+    d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    return d;
+  }
+  m = text.match(/^(\d{1,2})\s+([a-zżźćąśęłóń]{3})[a-zżźćąśęłóń]*\s+o\s+(\d{2}):(\d{2})/iu);
+  if (m) {
+    const day = Number(m[1]);
+    const month = MONTH_ABBR[m[2].toLowerCase()];
+    if (month !== undefined) {
+      const d = new Date(now.getFullYear(), month, day, Number(m[3]), Number(m[4]));
+      if (d.getTime() > now.getTime() + 86400000) d.setFullYear(d.getFullYear() - 1);
+      return d;
+    }
+  }
+  return null;
+}
 
 async function fetchZwik() {
   const results = [];
@@ -23,6 +57,7 @@ async function fetchZwik() {
     const $ = cheerio.load(html);
     const base = new URL(PAGE_URL).origin;
     const seen = new Set();
+    const now = new Date();
 
     $('h2').each((_, el) => {
       const $h2 = $(el);
@@ -46,7 +81,14 @@ async function fetchZwik() {
         $next = $next.next();
         guard++;
       }
-      const description = parts.join(' ')
+      const rawText = parts.join(' ');
+
+      // Wyciagamy prawdziwa date z poczatku tekstu (przed usunieciem jej
+      // jako "szumu"), zeby appka pokazywala faktyczna date publikacji,
+      // a nie date scrapowania.
+      const parsedDate = parseRelativeDate(rawText, now);
+
+      const description = rawText
         .replace(/Awarie i remonty/gi, '')
         .replace(/Czytaj więcej/gi, '')
         .replace(/^\s*(Dzisiaj|Wczoraj|\d{1,2}\s+\p{L}+)\s+o\s+\d{2}:\d{2}\s*/iu, '')
@@ -62,7 +104,7 @@ async function fetchZwik() {
         title,
         street: extractStreet(description) || extractStreet(title),
         description,
-        published_at: new Date().toISOString(),
+        published_at: (parsedDate || now).toISOString(),
       });
     });
   } catch (err) {

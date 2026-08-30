@@ -2,11 +2,31 @@ const cheerio = require('cheerio');
 const crypto = require('crypto');
 const { extractStreet } = require('./classify');
 
-// Strona Enea Operator (Rejon Dystrybucji Zielona Gora) nie ma osobnych linkow
-// do kazdego wylaczenia - wszystkie wpisy sa na jednej stronie, pogrupowane
-// pod naglowkami "Obszar <nazwa>" (znaczniki <h4>), a pod kazdym naglowkiem
-// nastepuja akapity z data/godzina oraz lista miejscowosci/ulic.
+// Strona Enea Operator nie ma osobnych linkow do kazdego wylaczenia -
+// wszystkie wpisy sa na jednej stronie, pogrupowane pod naglowkami
+// "Obszar <nazwa>" (znaczniki <h4>), a pod kazdym naglowkiem nastepuja
+// akapity z data/godzina oraz lista miejscowosci/ulic.
 const URL = 'https://wylaczenia.operator.enea.pl/index.php?rejon=1';
+
+const MONTH_FULL = {
+  stycznia: 0, lutego: 1, marca: 2, kwietnia: 3, maja: 4, czerwca: 5,
+  lipca: 6, sierpnia: 7, września: 8, wrzesnia: 8, października: 9, pazdziernika: 9,
+  listopada: 10, grudnia: 11,
+};
+
+// Wpisy zawieraja pelne polskie daty typu "23 lipca 2026 r." - wyciagamy
+// pierwsza taka date jako prawdziwa date wylaczenia, zamiast (jak wczesniej)
+// znaczyc kazdy wpis data scrapowania.
+function parseFullPolishDate(text) {
+  const m = text.match(/(\d{1,2})\s+([a-ząćęłńóśźż]+)\s+(\d{4})/iu);
+  if (!m) return null;
+  const day = Number(m[1]);
+  const month = MONTH_FULL[m[2].toLowerCase()];
+  const year = Number(m[3]);
+  if (month === undefined) return null;
+  const d = new Date(year, month, day);
+  return isNaN(d.getTime()) ? null : d;
+}
 
 async function fetchEnea() {
   const results = [];
@@ -21,12 +41,8 @@ async function fetchEnea() {
     $('h4').each((_, el) => {
       const $h4 = $(el);
       const title = $h4.text().trim();
-      // Prawdziwe wpisy zaczynaja sie od "Obszar ..." - pomijamy inne naglowki h4,
-      // jesli jakies znajda sie gdzie indziej na stronie (np. w stopce).
       if (!title || !/^obszar\s/i.test(title)) return;
 
-      // Zbieramy tekst kolejnych elementow siostrzanych, dopoki nie trafimy
-      // na kolejny naglowek h4 (czyli kolejny wpis) lub koniec listy.
       const parts = [];
       let $next = $h4.next();
       let guard = 0;
@@ -37,16 +53,10 @@ async function fetchEnea() {
         guard++;
       }
       const description = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 400);
-
-      // Pomijamy wpisy bez opisu - to samo zabezpieczenie co w htmlSources.js
       if (!description) return;
 
-      // Strona Enea nie ma osobnych linkow do kazdego wylaczenia - wszystkie
-      // wpisy wskazywalyby na ten sam adres URL. Baza danych wymaga jednak,
-      // zeby source_url byl unikalny (inaczej kolejne wpisy nadpisywalyby
-      // poprzednie). Dopisujemy wiec do adresu "kotwice" wyliczona ze skrotu
-      // tresci wpisu - stabilna dla tego samego wylaczenia miedzy kolejnymi
-      // scrapowaniami, ale rozna dla roznych wpisow.
+      const parsedDate = parseFullPolishDate(description) || parseFullPolishDate(title);
+
       const hash = crypto.createHash('md5').update(title + description).digest('hex').slice(0, 10);
 
       results.push({
@@ -56,7 +66,7 @@ async function fetchEnea() {
         title,
         street: extractStreet(description) || extractStreet(title),
         description,
-        published_at: new Date().toISOString(),
+        published_at: (parsedDate || new Date()).toISOString(),
       });
     });
   } catch (err) {

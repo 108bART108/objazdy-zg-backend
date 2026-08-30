@@ -3,16 +3,14 @@ const crypto = require('crypto');
 const { extractStreet } = require('./classify');
 
 // Strona ZDW ma wpisy w formie naglowek (h3) + cztery pola etykieta-wartosc:
-// "relacja:", "od dnia:", "do dnia:", "opis:". Uzywamy WYLACZNIE pola
-// "opis:" jako opisu - to najbardziej niezawodne, czytelne pole. Wczesniej
-// probowalismy dodatkowo doklejac "relacje" jako kontekst w nawiasie, ale
-// dla niektorych wpisow ta dodatkowa logika lapala za duzo tekstu i
-// powodowala zdublowanie tresci - stad uproszczenie.
+// "relacja:", "od dnia:", "do dnia:", "opis:". Uzywamy pola "opis:" jako
+// tresci, a pola "od dnia:" jako prawdziwej daty wpisu - zamiast (jak
+// wczesniej) znaczyc kazdy wpis data scrapowania, co myllo czytelnikow
+// sugerujac, ze to swiezy wpis, mimo ze prace trwaja od tygodni.
 //
 // WSZYSTKIE wpisy linkuja do tego samego adresu (mapa interaktywna
-// zud.zdw.zgora.pl), wiec potrzebujemy sztucznego, unikalnego source_url
-// (tak jak przy Enea), inaczej kolejne wpisy nadpisywalyby sie nawzajem
-// w bazie.
+// zud.zdw.zgora.pl), wiec potrzebujemy sztucznego, unikalnego source_url,
+// inaczej kolejne wpisy nadpisywalyby sie nawzajem w bazie.
 const PAGE_URL = 'https://www.zdw.zgora.pl/utrudnienia/';
 
 async function fetchZdw() {
@@ -30,8 +28,6 @@ async function fetchZdw() {
       const title = $h3.text().replace(/\s+/g, ' ').trim();
       if (!title) return;
 
-      // Zbieramy tekst kolejnych elementow siostrzanych (pola relacja/od
-      // dnia/do dnia/opis), az do kolejnego naglowka h3.
       const parts = [];
       let $next = $h3.next();
       let guard = 0;
@@ -43,12 +39,18 @@ async function fetchZdw() {
       }
       const fullText = parts.join(' | ');
 
-      // Wyciagamy WYLACZNIE tresc pola "opis:" - najbardziej niezawodne,
-      // czytelne pole z realnym opisem prac.
       const opisMatch = fullText.match(/opis:\s*\|?\s*(.+)$/i);
       let description = opisMatch ? opisMatch[1] : fullText;
       description = description.replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
       if (!description) return;
+
+      // Prawdziwa data wpisu: pole "od dnia:" (poczatek prac/utrudnienia),
+      // w formacie RRRR-MM-DD [HH:MM:SS]. Jesli nie znajdziemy - awaryjnie
+      // uzywamy daty scrapowania.
+      const odDniaMatch = fullText.match(/od dnia:\s*\|?\s*(\d{4}-\d{2}-\d{2})/i);
+      const publishedAt = odDniaMatch
+        ? new Date(`${odDniaMatch[1]}T00:00:00`).toISOString()
+        : new Date().toISOString();
 
       const hash = crypto.createHash('md5').update(title + fullText).digest('hex').slice(0, 10);
 
@@ -59,7 +61,7 @@ async function fetchZdw() {
         title,
         street: extractStreet(description) || extractStreet(title),
         description,
-        published_at: new Date().toISOString(),
+        published_at: publishedAt,
       });
     });
   } catch (err) {
