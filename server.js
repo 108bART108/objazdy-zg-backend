@@ -12,6 +12,7 @@ const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact } = require('./ciekawostka');
 const { notifySubscribers } = require('./push');
 const { runWeeklyHealthCheck } = require('./healthcheck');
+const { runDailyAdCheck } = require('./adReminders');
 
 const app = express();
 
@@ -96,23 +97,24 @@ app.get('/api/ads', (_req, res) => {
   res.json({ items: listActiveAds() });
 });
 
+// expires_at: opcjonalna data w formacie YYYY-MM-DD (pusta/brak = bezterminowa)
 app.post('/api/admin/ads', (req, res) => {
   if (!checkAdmin(req, res)) return;
-  const { business_name, tagline, link_url } = req.body || {};
+  const { business_name, tagline, link_url, expires_at } = req.body || {};
   if (!business_name || !tagline || !link_url) {
     return res.status(400).json({ error: 'wymagane: business_name, tagline, link_url' });
   }
-  const id = createAd({ business_name, tagline, link_url });
+  const id = createAd({ business_name, tagline, link_url, expires_at });
   res.json({ ok: true, id });
 });
 
 app.post('/api/admin/ads/:id', (req, res) => {
   if (!checkAdmin(req, res)) return;
-  const { business_name, tagline, link_url } = req.body || {};
+  const { business_name, tagline, link_url, expires_at } = req.body || {};
   if (!business_name || !tagline || !link_url) {
     return res.status(400).json({ error: 'wymagane: business_name, tagline, link_url' });
   }
-  updateAd(Number(req.params.id), { business_name, tagline, link_url });
+  updateAd(Number(req.params.id), { business_name, tagline, link_url, expires_at });
   res.json({ ok: true });
 });
 
@@ -163,6 +165,17 @@ app.post('/api/admin/healthcheck', async (req, res) => {
   }
 });
 
+// Recznie wywolane sprawdzenie wygasajacych/wygaslych reklam (do testow)
+app.post('/api/admin/ads-check', async (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  try {
+    await runDailyAdCheck();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Objazdy ZG API dziala na porcie ${PORT}`);
 });
@@ -172,12 +185,17 @@ cron.schedule('*/30 * * * *', () => {
   scrapeAll().catch((err) => console.error('[cron] blad:', err));
 });
 
-// Cotygodniowy automatyczny przeglad - kazda niedziela o 15:30 czasu
-// polskiego (Europe/Warsaw). Jawnie podajemy strefe czasowa, bo serwer
-// Render domyslnie dziala w UTC, a nie w czasie polskim.
+// Cotygodniowy automatyczny przeglad zdrowia appki - niedziela 15:30 (Warszawa)
 cron.schedule('30 15 * * 0', () => {
   console.log('[cron] uruchamiam cotygodniowy przeglad...');
   runWeeklyHealthCheck().catch((err) => console.error('[cron] blad przegladu:', err));
+}, { timezone: 'Europe/Warsaw' });
+
+// Codzienne sprawdzenie reklam (wygasle -> wylacz, wygasajace za <=7 dni -> przypomnienie)
+// - codziennie o 8:00 czasu polskiego
+cron.schedule('0 8 * * *', () => {
+  console.log('[cron] uruchamiam codzienne sprawdzenie reklam...');
+  runDailyAdCheck().catch((err) => console.error('[cron] blad sprawdzenia reklam:', err));
 }, { timezone: 'Europe/Warsaw' });
 
 scrapeAll().catch((err) => console.error('[start] blad pierwszego scrapowania:', err));

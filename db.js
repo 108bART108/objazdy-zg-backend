@@ -49,13 +49,15 @@ db.exec(`
   );
 `);
 
-// Migracja: dodaj kolumne image_url, jesli tabela zostala juz utworzona
-// wczesniej (przed dodaniem tej funkcji) i jeszcze jej nie ma. ALTER TABLE
-// rzuca blad, jesli kolumna juz istnieje - ignorujemy to bezpiecznie.
-try {
-  db.exec('ALTER TABLE local_ads ADD COLUMN image_url TEXT');
-} catch (err) {
-  // kolumna juz istnieje - nic nie robimy
+// Migracje: dodaj kolumny, jesli tabela zostala utworzona wczesniej (przed
+// dodaniem tych funkcji) i jeszcze ich nie ma. ALTER TABLE rzuca blad, jesli
+// kolumna juz istnieje - ignorujemy to bezpiecznie.
+const migrations = [
+  'ALTER TABLE local_ads ADD COLUMN expires_at TEXT',
+  'ALTER TABLE local_ads ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0',
+];
+for (const sql of migrations) {
+  try { db.exec(sql); } catch (err) { /* kolumna juz istnieje */ }
 }
 
 const upsertStmt = db.prepare(`
@@ -141,27 +143,34 @@ function getAllSubscriptions() {
 
 // --- Reklamy lokalnych firm ---
 
+// Aktywne reklamy do wyswietlenia w appce - tylko te, ktore nie wygasly
+// (expires_at puste = bezterminowa, albo data jeszcze nie minela).
 function listActiveAds() {
-  return db.prepare('SELECT * FROM local_ads WHERE active = 1 ORDER BY id DESC').all();
+  return db.prepare(`
+    SELECT * FROM local_ads
+    WHERE active = 1 AND (expires_at IS NULL OR expires_at = '' OR date(expires_at) >= date('now'))
+    ORDER BY id DESC
+  `).all();
 }
 
-function createAd({ business_name, tagline, link_url, image_url }) {
+function createAd({ business_name, tagline, link_url, expires_at }) {
   const info = db.prepare(`
-    INSERT INTO local_ads (business_name, tagline, link_url, image_url)
-    VALUES (@business_name, @tagline, @link_url, @image_url)
-  `).run({ business_name, tagline, link_url, image_url: image_url || null });
+    INSERT INTO local_ads (business_name, tagline, link_url, expires_at)
+    VALUES (@business_name, @tagline, @link_url, @expires_at)
+  `).run({ business_name, tagline, link_url, expires_at: expires_at || null });
   return info.lastInsertRowid;
 }
 
-function updateAd(id, { business_name, tagline, link_url, image_url }) {
+function updateAd(id, { business_name, tagline, link_url, expires_at }) {
   db.prepare(`
     UPDATE local_ads
     SET business_name = @business_name,
         tagline = @tagline,
         link_url = @link_url,
-        image_url = @image_url
+        expires_at = @expires_at,
+        reminder_sent = 0
     WHERE id = @id
-  `).run({ id, business_name, tagline, link_url, image_url: image_url || null });
+  `).run({ id, business_name, tagline, link_url, expires_at: expires_at || null });
 }
 
 function deactivateAd(id) {
@@ -170,6 +179,38 @@ function deactivateAd(id) {
 
 function listAllAds() {
   return db.prepare('SELECT * FROM local_ads ORDER BY id DESC').all();
+}
+
+// Wylacza reklamy, ktorych data wygasniecia juz minela. Zwraca liste
+// wylaczonych reklam (do logow/powiadomienia).
+function deactivateExpiredAds() {
+  const expired = db.prepare(`
+    SELECT * FROM local_ads
+    WHERE active = 1 AND expires_at IS NOT NULL AND expires_at != '' AND date(expires_at) < date('now')
+  `).all();
+  if (expired.length) {
+    const ids = expired.map((a) => a.id);
+    const placeholders = ids.map(() => '?').join(',');
+    db.prepare(`UPDATE local_ads SET active = 0 WHERE id IN (${placeholders})`).run(...ids);
+  }
+  return expired;
+}
+
+// Reklamy, ktore wygasaja w ciagu najblizszych 7 dni i jeszcze nie
+// wyslalismy dla nich przypomnienia.
+function getAdsNeedingReminder() {
+  return db.prepare(`
+    SELECT * FROM local_ads
+    WHERE active = 1
+      AND expires_at IS NOT NULL AND expires_at != ''
+      AND reminder_sent = 0
+      AND date(expires_at) <= date('now', '+7 days')
+      AND date(expires_at) >= date('now')
+  `).all();
+}
+
+function markReminderSent(id) {
+  db.prepare('UPDATE local_ads SET reminder_sent = 1 WHERE id = ?').run(id);
 }
 
 module.exports = {
@@ -187,4 +228,7 @@ module.exports = {
   updateAd,
   deactivateAd,
   listAllAds,
+  deactivateExpiredAds,
+  getAdsNeedingReminder,
+  markReminderSent,
 };
