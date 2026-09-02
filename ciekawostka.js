@@ -72,7 +72,7 @@ ${avoidText}Wazne zasady:
 // poprawnosc jezykowa PO POLSKU oraz wiarygodnosc faktu (z mozliwoscia
 // ponownego wyszukania), zanim tekst trafi do publikacji w appce.
 async function reviewFact(draftText) {
-  const prompt = `Otrzymales nizej ciekawostke o Zielonej Gorze, napisana automatycznie i przeznaczona do publikacji w aplikacji mobilnej. Twoim zadaniem jest jej weryfikacja przed publikacja.
+  const prompt = `Otrzymales nizej ciekawostke o Zielonej Gorze, napisana automatycznie i przeznaczona do publikacji w aplikacji mobilnej. Twoim zadaniem jest jej cicha weryfikacja przed publikacja.
 
 TEKST DO SPRAWDZENIA:
 "${draftText}"
@@ -81,20 +81,51 @@ Sprawdz dwie rzeczy:
 1. POPRAWNOSC JEZYKOWA: czy tekst jest napisany poprawna polszczyzna, bez bledow gramatycznych, ortograficznych czy dziwnych/nieistniejacych slow.
 2. WIARYGODNOSC FAKTU: jesli to potrzebne, wyszukaj w internecie i zweryfikuj, czy opisany fakt jest prawdziwy i mozliwy do potwierdzenia w wiarygodnych zrodlach.
 
-Zasady odpowiedzi:
+Zasady odpowiedzi - PRZECZYTAJ UWAZNIE:
 - Jesli tekst jest poprawny jezykowo I fakt jest wiarygodny - zwroc GO BEZ ZMIAN, dokladnie w tej samej formie.
-- Jesli sa bledy jezykowe (np. zle odmienione slowo, literowka, nienaturalne sformulowanie) - popraw WYLACZNIE te bledy, zachowujac reszte tekstu bez zmian.
-- Jesli fakt wydaje sie niepewny, niemozliwy do zweryfikowania lub nieprawdziwy - albo przeformuluj go na bardziej ostrozne, ogolne stwierdzenie (np. dodajac "podobno", "wedlug lokalnej tradycji"), albo - jesli to niemozliwe - zwroc inny, prosty i pewny fakt o Zielonej Gorze na podobny temat.
-- Zwroc WYLACZNIE finalna, gotowa do publikacji tresc ciekawostki - bez wstepu, bez wyjasnien, bez komentarzy typu "Tekst jest poprawny" czy "Poprawiono blad", bez cudzyslowow wokol calosci.`;
+- Jesli sa bledy jezykowe - popraw WYLACZNIE te bledy, zachowujac reszte tekstu bez zmian.
+- Jesli fakt wydaje sie niepewny - albo przeformuluj go na bardziej ostrozne stwierdzenie, albo zwroc inny, prosty i pewny fakt o Zielonej Gorze.
+- TWOJA CALA ODPOWIEDZ MA SKLADAC SIE WYLACZNIE Z GOTOWEGO TEKSTU CIEKAWOSTKI. Nic wiecej.
+- ZABRONIONE w odpowiedzi: jakikolwiek opis Twojego procesu myslenia, zdania typu "Zanim odpowiem", "Musze sprawdzic", "Po analizie", "Sprawdzam wiarygodnosc", naglowki, pogrubienia (**), listy punktowane, wyjasnienia co poprawiles.
+- Napisz odpowiedz TAK, jakbys byl autorem publikujacym gotowa ciekawostke w aplikacji - nie jako recenzent opisujacy swoja prace.
+
+Przyklad DOBREJ odpowiedzi (sam tekst ciekawostki, nic wiecej):
+Zielona Gora bywa nazywana miastem win - lokalna tradycja winiarska siega sredniowiecza.
+
+Przyklad ZLEJ odpowiedzi (nie rob tak - to opis procesu, nie ciekawostka):
+Sprawdzilem ten fakt i moge potwierdzic, ze jest prawdziwy. Oto poprawiona wersja: ...`;
 
   const text = await callClaude(prompt, true);
   return text.slice(0, 500);
+}
+
+// Prosty, niezalezny od modelu filtr bezpieczenstwa: jesli odpowiedz modelu
+// "recenzenta" mimo instrukcji zawiera slady opisywania wlasnego procesu
+// myslowego (zamiast samej gotowej ciekawostki), odrzucamy ja i uzywamy
+// oryginalnego szkicu z kroku 1. Lepiej opublikowac niezrecenzowany, ale
+// czysty tekst, niz przypadkowo pokazac uzytkownikom "tok myslenia" AI.
+function looksLikeMetaCommentary(text) {
+  if (!text) return true;
+  if (text.length > 550) return true;
+  if (text.includes('**')) return true;
+  const suspiciousPhrases = [
+    'zanim', 'muszę sprawdzić', 'musze sprawdzic', 'po analizie', 'po dokładnej analizie',
+    'po dokladnej analizie', 'sprawdzam', 'sprawdziłem', 'sprawdzilem', 'mogę potwierdzić',
+    'moge potwierdzic', 'weryfikacja', 'okazuje się', 'okazuje sie', 'błędy językowo',
+    'bledy jezykowo', 'poprawiona wersja', 'oto poprawiona', 'tekst zawiera',
+  ];
+  const lower = text.toLowerCase();
+  return suspiciousPhrases.some((p) => lower.includes(p));
 }
 
 async function generateFactViaClaude(avoidList) {
   const draft = await generateFact(avoidList);
   try {
     const reviewed = await reviewFact(draft);
+    if (looksLikeMetaCommentary(reviewed)) {
+      console.warn('[ciekawostka] recenzja wygladala na "tok myslenia" AI - uzywam czystego szkicu z kroku 1');
+      return draft;
+    }
     return reviewed || draft;
   } catch (err) {
     // Jesli krok weryfikacji z jakiegos powodu zawiedzie (np. chwilowy
