@@ -117,6 +117,10 @@ function getDailyFact(date) {
   return db.prepare('SELECT * FROM daily_fact WHERE fact_date = ?').get(date);
 }
 
+function deleteDailyFact(date) {
+  db.prepare('DELETE FROM daily_fact WHERE fact_date = ?').run(date);
+}
+
 function saveDailyFact(date, content) {
   db.prepare(`
     INSERT INTO daily_fact (fact_date, content) VALUES (@date, @content)
@@ -217,6 +221,7 @@ module.exports = {
   upsertMany,
   listUtrudnienia,
   getDailyFact,
+  deleteDailyFact,
   saveDailyFact,
   getRecentFacts,
   saveSubscription,

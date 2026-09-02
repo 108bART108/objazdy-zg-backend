@@ -9,7 +9,7 @@ const {
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
-const { getTodayFact } = require('./ciekawostka');
+const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
 const { notifySubscribers } = require('./push');
 const { runWeeklyHealthCheck } = require('./healthcheck');
 const { runDailyAdCheck } = require('./adReminders');
@@ -61,6 +61,19 @@ app.get('/api/ciekawostka', async (_req, res) => {
     res.json(fact);
   } catch (err) {
     console.error('[ciekawostka] blad generowania:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Wymusza usuniecie dzisiejszej ciekawostki i wygenerowanie nowej -
+// przydatne, gdy dzisiejsza wersja okaze sie wadliwa.
+app.post('/api/admin/ciekawostka/regenerate', async (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  try {
+    const fact = await forceRegenerateTodayFact();
+    res.json(fact);
+  } catch (err) {
+    console.error('[ciekawostka] blad regeneracji:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
