@@ -1,0 +1,121 @@
+// qualityCheck.js
+//
+// Wspolna warstwa "podwojnego sprawdzenia" jakosci wpisow, uruchamiana
+// dla KAZDEGO wpisu z KAZDEJ kategorii (drogi, mzk, wodociagi, prad),
+// tuz przed zapisem do bazy - niezaleznie od logiki konkretnego scrapera.
+//
+// Nie wymaga zadnego API ani kosztow - to czysto regulowa heurystyka.
+//
+// Cel: zlapac wpisy typu z przykladu MZK:
+//   title:       "ul. Chemiczna 865-713 Zielona Gora"          (sam adres/kod, zero kontekstu)
+//   description: "...odpowiedzialnosciaul. Chemiczna..."       (sklejona stopka firmowa, bez spacji)
+//
+// Wpisy, ktore nie przejda testow, NIE sa odrzucane (mogloby to zgubic
+// prawdziwa informacje) - dostaja flage needs_review=true. Frontend/push
+// powinien traktowac je inaczej (patrz uwagi na koncu pliku).
+
+// --- Wzorce typowe dla "stopki firmowej" zamiast tresci komunikatu ---
+const BOILERPLATE_PATTERNS = [
+  /sp[oó]łka z ograniczon[aą] odpowiedzialno/i,
+  /\bnip:?\s*\d/i,
+  /\bregon:?\s*\d/i,
+  // caly tekst to praktycznie tylko adres z kodem pocztowym, bez nic wiecej
+  /^[\wżźćąśęłóńĄŚĘŁÓŃŻŹĆ .,-]{0,40}ul\.\s?[\wżźćąśęłóńĄŚĘŁÓŃŻŹĆ .-]+\d+[a-zA-Z]?(\/\d+)?\s+\d{2}-\d{3}\s+[\wżźćąśęłóńĄŚĘŁÓŃŻŹĆ ]+$/i,
+];
+
+// --- Slowa, ktorych obecnosc w tytule oznacza ze faktycznie opisuje on
+//     zdarzenie (a nie jest samym adresem/kodem trasy) ---
+const EVENT_WORDS = [
+  'zmiana', 'zmiany', 'zmieni', 'objazd', 'remont', 'awari', 'wyłączeni',
+  'wylaczeni', 'przerwa', 'zawieszon', 'utrudnie', 'kursuj', 'trasa', 'trasy',
+  'trasie', 'linii', 'linia', 'roboty', 'prace', 'naprawa', 'planowan',
+  'komunikat', 'informacj', 'wstrzyman', 'zamknieci', 'zamkniet',
+];
+
+// Wstawia spacje tam, gdzie mala i wielka litera sa sklejone bez separatora
+// - typowy efekt $(el).text() na sasiadujacych elementach / <br> bez spacji
+// np. "odpowiedzialnosciaul." -> "odpowiedzialnosciaul." (male+male, nie zlapie)
+// ale "odpowiedzialnością" + "ul." -> gdy nastepne slowo zaczyna sie duza
+// litera po malej - to zlapiemy. Dodatkowo lapiemy zlepek litera+"ul."/"al."
+function fixGluedText(text) {
+  if (!text) return text;
+  let fixed = text.replace(/([a-ząćęłńóśźż])([A-ZĄĆĘŁŃÓŚŹŻ])/g, '$1 $2');
+  // czesty przypadek: "...odpowiedzialnosciaul. Chemiczna" - male "a" + "ul."
+  fixed = fixed.replace(/([a-ząćęłńóśźż])(ul\.|al\.|pl\.)\s?([A-ZĄĆĘŁŃÓŚŹŻ])/g, '$1 $2 $3');
+  return fixed.replace(/\s+/g, ' ').trim();
+}
+
+function looksLikeBoilerplate(text) {
+  if (!text) return false;
+  return BOILERPLATE_PATTERNS.some((re) => re.test(text));
+}
+
+// Tytul, ktory nie mowi nic o TYM CO SIE STALO - sam adres/kod bez
+// zadnego slowa-zdarzenia z listy EVENT_WORDS.
+function titleLacksContext(title) {
+  if (!title) return true;
+  const lower = title.toLowerCase();
+  const hasEventWord = EVENT_WORDS.some((w) => lower.includes(w));
+  if (hasEventWord) return false;
+
+  const startsWithStreet = /^(ul\.|al\.|pl\.)\s/i.test(title.trim());
+  // np. "865-713" - wyglada na kod trasy/przystanku, nie na informacje
+  const hasBareCodeNumber = /\b\d{2,4}-\d{2,4}\b/.test(title);
+
+  return startsWithStreet || hasBareCodeNumber;
+}
+
+/**
+ * Glowna funkcja - przyjmuje surowy wpis ze scrapera, zwraca poprawiony
+ * wpis (z naprawionymi sklejeniami) + ewentualna flage needs_review.
+ *
+ * @param {object} entry - wpis z pol: title, description, category, source_name
+ * @returns {object} entry rozszerzony o needs_review (bool) i review_reasons (string[])
+ */
+function qualityCheck(entry) {
+  let title = fixGluedText(entry.title);
+  let description = fixGluedText(entry.description);
+
+  const reasons = [];
+
+  if (looksLikeBoilerplate((description || '').slice(0, 150))) {
+    reasons.push('opis wyglada na stopke firmowa / dane adresowe, nie na tresc komunikatu');
+  }
+  if (titleLacksContext(title)) {
+    reasons.push('tytul to sam adres/kod bez informacji o tym co sie stalo');
+  }
+  if (description && title && description.trim().toLowerCase() === title.trim().toLowerCase()) {
+    reasons.push('opis identyczny z tytulem - brak realnej dodatkowej tresci');
+  }
+  if (description && description.trim().length < 25) {
+    reasons.push('opis bardzo krotki (ponizej 25 znakow) - moze byc urwany/pusty');
+  }
+
+  return {
+    ...entry,
+    title,
+    description,
+    needs_review: reasons.length > 0,
+    review_reasons: reasons.length > 0 ? reasons : undefined,
+  };
+}
+
+module.exports = { qualityCheck, fixGluedText, looksLikeBoilerplate, titleLacksContext };
+
+// --- Uwagi do integracji (nie kod, do przeczytania) ---
+//
+// 1. W scrapeAll.js: kazdy wpis z kazdego scrapera (drogi/mzk/wodociagi/prad)
+//    powinien przejsc przez qualityCheck(entry) PRZED zapisem do bazy (db.js).
+//
+// 2. W db.js: dodaj kolumne `needs_review INTEGER DEFAULT 0` (+ opcjonalnie
+//    `review_reasons TEXT`) do tabeli wpisow, i zapisuj te wartosci z entry.
+//
+// 3. W push.js: NIE wysylaj powiadomienia push dla wpisu z needs_review=1
+//    (zeby "belkot" nie trafil od razu do subskrybentow) - ale sam wpis
+//    nadal moze byc widoczny w appce, ewentualnie z dyskretna plakietka.
+//
+// 4. W admin.html: dodaj widok/liste "Do sprawdzenia" pokazujacy wpisy
+//    z needs_review=1 wraz z review_reasons, z mozliwoscia recznej edycji
+//    tytulu/opisu i "zatwierdzenia" (needs_review=0) - to Twoj rzeczywisty
+//    drugi zestaw oczu, tani i szybki, bo AI/regula juz odsiala oczywiste
+//    smieci, a Ty poprawiasz tylko te niepewne przypadki.

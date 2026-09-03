@@ -1,6 +1,7 @@
 const cheerio = require('cheerio');
 const crypto = require('crypto');
 const { extractStreet } = require('./classify');
+const { qualityCheck } = require('./qualityCheck');
 
 const URL = 'https://wylaczenia.operator.enea.pl/index.php?rejon=1';
 
@@ -55,7 +56,7 @@ async function fetchEnea() {
 
       const hash = crypto.createHash('md5').update(title + description).digest('hex').slice(0, 10);
 
-      results.push({
+      const checked = qualityCheck({
         source_url: `${URL}#${hash}`,
         source_name: 'Enea Operator - wyłączenia prądu',
         category: 'prad',
@@ -65,6 +66,10 @@ async function fetchEnea() {
         published_at: null,
         event_date: parsedDate ? parsedDate.toISOString() : null,
       });
+      if (checked.needs_review) {
+        console.warn(`[enea] wpis oznaczony do przejrzenia (${title}):`, checked.review_reasons.join('; '));
+      }
+      results.push(checked);
     });
   } catch (err) {
     console.error('[enea] blad pobierania:', err.message);

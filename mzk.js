@@ -1,8 +1,14 @@
 const cheerio = require('cheerio');
 const { extractStreet } = require('./classify');
+const { qualityCheck } = require('./qualityCheck');
 
 const PAGE_URL = 'https://www.mzk.zgora.pl/aktualnosci';
 const HEADERS = { 'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)' };
+
+// Akapity typu "stopka firmowa" (nazwa spolki, adres, NIP) czesto sa
+// dluzsze niz 60 znakow i pojawiaja sie PRZED wlasciwa trescia komunikatu
+// - trzeba je jawnie pomijac, zamiast brac "pierwszy dluzszy <p>".
+const BOILERPLATE_RE = /sp[oó]łka z ograniczon[aą] odpowiedzialno|\bnip:?\s*\d|\bregon:?\s*\d/i;
 
 async function fetchArticleDescription(url) {
   try {
@@ -13,8 +19,12 @@ async function fetchArticleDescription(url) {
     let found = null;
     $('p').each((_, el) => {
       if (found) return;
-      const t = $(el).text().replace(/\s+/g, ' ').trim();
-      if (t.length > 60) found = t;
+      const $el = $(el);
+      // Wstaw spacje w miejscu <br>, zeby sklejone linie (np. nazwa firmy
+      // + adres w tym samym <p>) nie zlepily sie w jedno slowo po .text()
+      $el.find('br').replaceWith(' ');
+      const t = $el.text().replace(/\s+/g, ' ').trim();
+      if (t.length > 60 && !BOILERPLATE_RE.test(t)) found = t;
     });
     return found ? found.slice(0, 400) : null;
   } catch (err) {
@@ -73,7 +83,7 @@ async function fetchMzk() {
 
     limited.forEach((a, i) => {
       const description = descriptions[i] || a.title;
-      results.push({
+      const checked = qualityCheck({
         source_url: a.href,
         source_name: 'MZK Zielona Gora',
         category: 'mzk',
@@ -82,6 +92,10 @@ async function fetchMzk() {
         description,
         published_at: a.publishedAt,
       });
+      if (checked.needs_review) {
+        console.warn(`[mzk] wpis oznaczony do przejrzenia (${a.href}):`, checked.review_reasons.join('; '));
+      }
+      results.push(checked);
     });
   } catch (err) {
     console.error('[mzk] blad pobierania:', err.message);

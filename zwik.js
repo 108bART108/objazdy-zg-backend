@@ -1,5 +1,6 @@
 const cheerio = require('cheerio');
 const { extractStreet } = require('./classify');
+const { qualityCheck } = require('./qualityCheck');
 
 const PAGE_URL = 'https://www.zwik.zgora.pl/aktualnosci/awarie-i-remonty/';
 const PERMALINK_RE = /^https?:\/\/www\.zwik\.zgora\.pl\/\d{4}\/\d{2}\/[a-z0-9-]+\/?$/i;
@@ -89,7 +90,7 @@ async function fetchZwik() {
         .slice(0, 400);
       if (!description) return;
 
-      results.push({
+      const checked = qualityCheck({
         source_url: href,
         source_name: 'ZWiK Zielona Gora',
         category: 'wodociagi',
@@ -98,6 +99,10 @@ async function fetchZwik() {
         description,
         published_at: parsedDate ? parsedDate.toISOString() : null,
       });
+      if (checked.needs_review) {
+        console.warn(`[zwik] wpis oznaczony do przejrzenia (${title}):`, checked.review_reasons.join('; '));
+      }
+      results.push(checked);
     });
   } catch (err) {
     console.error('[zwik] blad pobierania:', err.message);

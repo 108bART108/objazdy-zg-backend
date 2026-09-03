@@ -1,6 +1,7 @@
 const cheerio = require('cheerio');
 const crypto = require('crypto');
 const { extractStreet } = require('./classify');
+const { qualityCheck } = require('./qualityCheck');
 
 const PAGE_URL = 'https://www.zdw.zgora.pl/utrudnienia/';
 
@@ -49,7 +50,7 @@ async function fetchZdw() {
 
       const hash = crypto.createHash('md5').update(title + fullText).digest('hex').slice(0, 10);
 
-      results.push({
+      const checked = qualityCheck({
         source_url: `${PAGE_URL}#${hash}`,
         source_name: 'ZDW Zielona Gora',
         category: 'drogi',
@@ -59,6 +60,10 @@ async function fetchZdw() {
         published_at: odDniaIso,
         event_date: odDniaIso,
       });
+      if (checked.needs_review) {
+        console.warn(`[zdw] wpis oznaczony do przejrzenia (${title}):`, checked.review_reasons.join('; '));
+      }
+      results.push(checked);
     });
   } catch (err) {
     console.error('[zdw] blad pobierania:', err.message);
