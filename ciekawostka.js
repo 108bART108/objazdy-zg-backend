@@ -55,11 +55,12 @@ async function generateFact(avoidList) {
     ? `Nie powtarzaj zadnej z ponizszych, juz wykorzystanych ciekawostek (mozesz poruszyc podobny temat, ale sformuluj to inaczej i skup sie na innym szczególe):\n${avoidList.map((f) => `- ${f}`).join('\n')}\n\n`
     : '';
 
-  const prompt = `Wyszukaj w internecie i podaj jedna, krotka (maksymalnie 2-3 zdania) ciekawostke o miescie Zielona Gora w wojewodztwie lubuskim w Polsce, lub jego najblizszych okolicach. Moze dotyczyc historii, tradycji winiarskiej, przyrody, znanych mieszkancow, geografii, kultury, sportu lub architektury.
+  const prompt = `Wyszukaj w internecie i podaj jedna, krotka (maksymalnie 2 zdania) ciekawostke o miescie Zielona Gora w wojewodztwie lubuskim w Polsce, lub jego najblizszych okolicach. Moze dotyczyc historii, tradycji winiarskiej, przyrody, znanych mieszkancow, geografii, kultury, sportu lub architektury.
 
 WAZNE: zanim odpowiesz, sprawdz fakt w co najmniej jednym wiarygodnym zrodle (np. Wikipedia, oficjalna strona miasta zielona-gora.pl, lokalne portale informacyjne, National Geographic Polska). Nie polegaj wylacznie na swojej wiedzy z treningu - realnie wyszukaj i zweryfikuj.
 
 ${avoidText}Wazne zasady:
+- Ciekawostka MUSI dotyczyc TYLKO JEDNEGO tematu, miejsca lub wydarzenia. NIE LACZ dwoch roznych, niepowiazanych ze soba faktow w jednym tekscie (np. nie pisz jednoczesnie o planetarium ORAZ o osobnych pomnikach - to dwa rozne tematy, wybierz TYLKO JEDEN).
 - Podaj WYLACZNIE tresc ciekawostki, bez wstepu, bez powitania, bez cudzyslowow, bez podpisu, bez linkow.
 - Pisz wylacznie o faktach, ktore znalazles i zweryfikowales w wyszukanych zrodlach. Jesli nie jestes pewien dokladnej daty, liczby czy nazwiska, sformuluj zdanie ostrozniej (np. "prawdopodobnie", "w XIX wieku", "kilkaset") zamiast podawac falszywie precyzyjne dane.
 - Nie wymyslaj faktow, ktorych nie potwierdzily wyniki wyszukiwania - lepiej podac bardziej ogolna, ale prawdziwa informacje.`;
@@ -77,13 +78,15 @@ async function reviewFact(draftText) {
 TEKST DO SPRAWDZENIA:
 "${draftText}"
 
-Sprawdz dwie rzeczy:
+Sprawdz TRZY rzeczy:
 1. POPRAWNOSC JEZYKOWA: czy tekst jest napisany poprawna polszczyzna, bez bledow gramatycznych, ortograficznych czy dziwnych/nieistniejacych slow.
 2. WIARYGODNOSC FAKTU: jesli to potrzebne, wyszukaj w internecie i zweryfikuj, czy opisany fakt jest prawdziwy i mozliwy do potwierdzenia w wiarygodnych zrodlach.
+3. JEDEN TEMAT: czy tekst dotyczy TYLKO JEDNEGO tematu/miejsca/wydarzenia. Jesli tekst laczy dwa rozne, niepowiazane fakty w jednym akapicie (np. jedno zdanie o planetarium, a drugie o zupelnie innym pomniku) - to blad do poprawienia: zostaw TYLKO PIERWSZY, glowny temat, a reszte usun.
 
 Zasady odpowiedzi - PRZECZYTAJ UWAZNIE:
-- Jesli tekst jest poprawny jezykowo I fakt jest wiarygodny - zwroc GO BEZ ZMIAN, dokladnie w tej samej formie.
+- Jesli tekst jest poprawny jezykowo, dotyczy jednego tematu, I fakt jest wiarygodny - zwroc GO BEZ ZMIAN, dokladnie w tej samej formie.
 - Jesli sa bledy jezykowe - popraw WYLACZNIE te bledy, zachowujac reszte tekstu bez zmian.
+- Jesli tekst laczy dwa rozne tematy - zostaw tylko jeden (pierwszy, glowny) watek, usuwajac drugi.
 - Jesli fakt wydaje sie niepewny - albo przeformuluj go na bardziej ostrozne stwierdzenie, albo zwroc inny, prosty i pewny fakt o Zielonej Gorze.
 - TWOJA CALA ODPOWIEDZ MA SKLADAC SIE WYLACZNIE Z GOTOWEGO TEKSTU CIEKAWOSTKI. Nic wiecej.
 - ZABRONIONE w odpowiedzi: jakikolwiek opis Twojego procesu myslenia, zdania typu "Zanim odpowiem", "Musze sprawdzic", "Po analizie", "Sprawdzam wiarygodnosc", naglowki, pogrubienia (**), listy punktowane, wyjasnienia co poprawiles.

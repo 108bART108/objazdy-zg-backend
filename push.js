@@ -3,6 +3,13 @@ const { getAllSubscriptions, deleteSubscription } = require('./db');
 
 const APP_URL = 'https://objazdy-zg-frontend.onrender.com';
 
+const CATEGORY_LABELS = {
+  drogi: 'Drogi',
+  mzk: 'MZK',
+  wodociagi: 'Wodociągi',
+  prad: 'Prąd',
+};
+
 let configured = false;
 function ensureConfigured() {
   if (configured) return true;
@@ -42,9 +49,17 @@ async function notifySubscribers(newItems) {
     if (!matched.length) continue;
 
     const first = matched[0];
+    // Etykieta kategorii w tytule powiadomienia - jesli wszystkie pasujace
+    // wpisy sa z jednej kategorii, pokazujemy jej nazwe; jesli to mieszanka
+    // kilku kategorii naraz, laczymy je znakiem "+".
+    const distinctCategories = [...new Set(matched.map((m) => m.category))];
+    const categoryLabel = distinctCategories
+      .map((c) => CATEGORY_LABELS[c] || c)
+      .join(' + ');
+
     const title = matched.length === 1
-      ? `Nowe: ${first.street || first.title}`
-      : `Nowe utrudnienia (${matched.length})`;
+      ? `${categoryLabel}: ${first.street || first.title}`
+      : `${categoryLabel} — nowe utrudnienia (${matched.length})`;
     const body = matched.length === 1
       ? (first.description || '').slice(0, 120)
       : matched.map((m) => m.street || m.title).slice(0, 3).join(', ');
