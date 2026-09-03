@@ -149,7 +149,7 @@ function upsertMany(items) {
 }
 
 function listUtrudnienia({ category, search, limit = 50 } = {}) {
-  let query = 'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0';
+  let query = 'SELECT * FROM utrudnienia WHERE active = 1';
   const params = {};
 
   if (category && category !== 'all') {
@@ -281,26 +281,6 @@ function markReminderSent(id) {
   db.prepare('UPDATE local_ads SET reminder_sent = 1 WHERE id = ?').run(id);
 }
 
-// Wpisy oznaczone przez qualityCheck jako wymagajace recznego przejrzenia
-// (np. sklejony tekst, tytul-sam-adres, opis wygladajacy na boilerplate).
-// To lista "do sprawdzenia" dla panelu admina.
-function listNeedsReview() {
-  return db.prepare(`
-    SELECT * FROM utrudnienia
-    WHERE needs_review = 1 AND active = 1
-    ORDER BY fetched_at DESC
-  `).all();
-}
-
-// Reczne zatwierdzenie wpisu w adminie - zdejmuje flage needs_review.
-// Jesli w kolejnym cyklu scraper znowu wykryje ten sam problem, flaga
-// wroci (needs_review jest zawsze nadpisywane najswiezsza ocena przy
-// kazdym scrapowaniu) - wiec to zatwierdzenie dziala dopoki zrodlowa
-// strona nie zmieni sie ponownie w ten sam wadliwy sposob.
-function markReviewed(id) {
-  db.prepare('UPDATE utrudnienia SET needs_review = 0, review_reasons = NULL WHERE id = ?').run(id);
-}
-
 module.exports = {
   db,
   upsertMany,
@@ -320,6 +300,4 @@ module.exports = {
   deactivateExpiredAds,
   getAdsNeedingReminder,
   markReminderSent,
-  listNeedsReview,
-  markReviewed,
 };

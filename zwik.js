@@ -1,6 +1,7 @@
 const cheerio = require('cheerio');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
+const { extractPolishDate } = require('./polishDates');
 
 const PAGE_URL = 'https://www.zwik.zgora.pl/aktualnosci/awarie-i-remonty/';
 const PERMALINK_RE = /^https?:\/\/www\.zwik\.zgora\.pl\/\d{4}\/\d{2}\/[a-z0-9-]+\/?$/i;
@@ -90,6 +91,12 @@ async function fetchZwik() {
         .slice(0, 400);
       if (!description) return;
 
+      // Wiekszosc wpisow ZWiK to biezace awarie (juz parsowane wyzej jako
+      // published_at), ale czasem opis zapowiada konkretna, przyszla date
+      // (np. planowany remont) - lapiemy ja tez jako event_date, zeby
+      // dostac te sama zolta plakietke co Enea/ZDW gdy to zasadne.
+      const eventDate = extractPolishDate(description) || extractPolishDate(title);
+
       const checked = qualityCheck({
         source_url: href,
         source_name: 'ZWiK Zielona Gora',
@@ -98,6 +105,7 @@ async function fetchZwik() {
         street: extractStreet(description) || extractStreet(title),
         description,
         published_at: parsedDate ? parsedDate.toISOString() : null,
+        event_date: eventDate ? eventDate.toISOString() : null,
       });
       if (checked.needs_review) {
         console.warn(`[zwik] wpis oznaczony do przejrzenia (${title}):`, checked.review_reasons.join('; '));

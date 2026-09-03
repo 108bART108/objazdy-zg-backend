@@ -6,6 +6,8 @@
 const Parser = require('rss-parser');
 const parser = new Parser();
 const { detectCategory, extractStreet } = require('./classify');
+const { qualityCheck } = require('./qualityCheck');
+const { extractPolishDate } = require('./polishDates');
 
 // Mozna dodac wiecej tagow, np. 'mzk', 'ofensywa-drogowa' - kazdy tag WP ma wlasny feed.
 const FEEDS = [
@@ -21,15 +23,22 @@ async function fetchUmZgora() {
       const parsed = await parser.parseURL(feed.url);
       for (const item of parsed.items) {
         const text = `${item.title} ${item.contentSnippet || ''}`;
-        results.push({
+        const description = (item.contentSnippet || '').slice(0, 400);
+        const eventDate = extractPolishDate(description) || extractPolishDate(item.title);
+        const checked = qualityCheck({
           source_url: item.link,
           source_name: feed.name,
           category: detectCategory(text),
           title: item.title,
           street: extractStreet(item.title),
-          description: (item.contentSnippet || '').slice(0, 400),
+          description,
           published_at: item.isoDate || item.pubDate || new Date().toISOString(),
+          event_date: eventDate ? eventDate.toISOString() : null,
         });
+        if (checked.needs_review) {
+          console.warn(`[umZgora] wpis oznaczony do przejrzenia (${item.link}):`, checked.review_reasons.join('; '));
+        }
+        results.push(checked);
       }
     } catch (err) {
       console.error(`[umZgora] blad pobierania ${feed.url}:`, err.message);

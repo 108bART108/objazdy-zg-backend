@@ -1,5 +1,7 @@
 const cheerio = require('cheerio');
 const { detectCategory, extractStreet } = require('./classify');
+const { qualityCheck } = require('./qualityCheck');
+const { extractPolishDate } = require('./polishDates');
 
 // Generyczny mechanizm - obecnie bez zadnego zrodla. ZDW i MZK maja teraz
 // wlasne, dedykowane scrapery (zdw.js, mzk.js) dopasowane do ich
@@ -38,8 +40,9 @@ async function fetchOne(source) {
       if (!description) return;
 
       const text = `${title} ${description}`;
+      const eventDate = extractPolishDate(description) || extractPolishDate(title);
 
-      results.push({
+      const checked = qualityCheck({
         source_url: link,
         source_name: source.name,
         category: detectCategory(text) || source.defaultCategory,
@@ -47,7 +50,12 @@ async function fetchOne(source) {
         street: extractStreet(title),
         description,
         published_at: new Date().toISOString(),
+        event_date: eventDate ? eventDate.toISOString() : null,
       });
+      if (checked.needs_review) {
+        console.warn(`[htmlSources] wpis oznaczony do przejrzenia (${link}):`, checked.review_reasons.join('; '));
+      }
+      results.push(checked);
     });
   } catch (err) {
     console.error(`[htmlSources] blad pobierania ${source.name} (${source.url}):`, err.message);

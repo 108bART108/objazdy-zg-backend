@@ -1,6 +1,7 @@
 const cheerio = require('cheerio');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
+const { extractPolishDate } = require('./polishDates');
 
 const PAGE_URL = 'https://www.mzk.zgora.pl/aktualnosci';
 const HEADERS = { 'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)' };
@@ -83,6 +84,11 @@ async function fetchMzk() {
 
     limited.forEach((a, i) => {
       const description = descriptions[i] || a.title;
+      // Wyciagamy konkretna date wydarzenia (np. "31 sierpnia") z opisu,
+      // a jak jej tam nie ma - probujemy z tytulu. Dzieki temu appka moze
+      // pokazac te sama zolta plakietke "Dzisiaj/Jutro/za X dni" co juz
+      // dziala dla kategorii Prad (Enea).
+      const eventDate = extractPolishDate(description) || extractPolishDate(a.title);
       const checked = qualityCheck({
         source_url: a.href,
         source_name: 'MZK Zielona Gora',
@@ -91,6 +97,7 @@ async function fetchMzk() {
         street: extractStreet(description) || extractStreet(a.title),
         description,
         published_at: a.publishedAt,
+        event_date: eventDate ? eventDate.toISOString() : null,
       });
       if (checked.needs_review) {
         console.warn(`[mzk] wpis oznaczony do przejrzenia (${a.href}):`, checked.review_reasons.join('; '));
