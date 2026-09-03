@@ -18,7 +18,7 @@ db.exec(`
     street TEXT,
     description TEXT,
     published_at TEXT,
-    fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    fetched_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     active INTEGER NOT NULL DEFAULT 1
   );
 
@@ -30,13 +30,13 @@ db.exec(`
     endpoint TEXT UNIQUE NOT NULL,
     subscription_json TEXT NOT NULL,
     categories TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
   CREATE TABLE IF NOT EXISTS daily_fact (
     fact_date TEXT PRIMARY KEY,
     content TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
   CREATE TABLE IF NOT EXISTS local_ads (
@@ -45,7 +45,7 @@ db.exec(`
     tagline TEXT NOT NULL,
     link_url TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 `);
 
@@ -95,7 +95,7 @@ try {
 //    po prostu zachowa ostatnia znana, dobra wartosc.
 const upsertStmt = db.prepare(`
   INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at, event_date, needs_review, review_reasons)
-  VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, datetime('now')), @event_date, @needs_review, @review_reasons)
+  VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), @event_date, @needs_review, @review_reasons)
   ON CONFLICT(source_url) DO UPDATE SET
     title = excluded.title,
     street = excluded.street,
