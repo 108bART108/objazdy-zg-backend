@@ -8,7 +8,7 @@ const HEADERS = { 'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)' }
 // Akapity typu "stopka firmowa" (nazwa spolki, adres, NIP) czesto sa
 // dluzsze niz 60 znakow i pojawiaja sie PRZED wlasciwa trescia komunikatu
 // - trzeba je jawnie pomijac, zamiast brac "pierwszy dluzszy <p>".
-const BOILERPLATE_RE = /sp[oó]łka z ograniczon[aą] odpowiedzialno|\bnip:?\s*\d|\bregon:?\s*\d/i;
+const BOILERPLATE_RE = /sp[oó]łka z ograniczon[aą] odpowiedzialno|\bnip:?\s*\d|\bregon:?\s*\d|pliki?\s+cookies?|ustawie(ń|niami)?\s+(dotycz\S*\s+)?cookies|ustawieniami\s+przegl\p{L}darki|korzystaj\p{L}c\s+z\s+(naszego\s+)?serwisu\s+bez\s+zmiany/iu;
 
 async function fetchArticleDescription(url) {
   try {

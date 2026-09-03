@@ -19,8 +19,9 @@ const BOILERPLATE_PATTERNS = [
   /sp[oó]łka z ograniczon[aą] odpowiedzialno/i,
   /\bnip:?\s*\d/i,
   /\bregon:?\s*\d/i,
-  // caly tekst to praktycznie tylko adres z kodem pocztowym, bez nic wiecej
-  /^[\wżźćąśęłóńĄŚĘŁÓŃŻŹĆ .,-]{0,40}ul\.\s?[\wżźćąśęłóńĄŚĘŁÓŃŻŹĆ .-]+\d+[a-zA-Z]?(\/\d+)?\s+\d{2}-\d{3}\s+[\wżźćąśęłóńĄŚĘŁÓŃŻŹĆ ]+$/i,
+  /^ul\.\s?[\wżźćąśęłóńĄŚĘŁÓŃŻŹĆ.\- ]{2,30}\s+\d+[\/\-]?\d*\s+\d{2}-\d{3}/i, // sam adres z kodem pocztowym
+  // banery/komunikaty o cookies i RODO - czesto pierwszy dluzszy <p> na stronie
+  /pliki?\s+cookies?|ustawie(ń|niami)?\s+(dotycz\S*\s+)?cookies|ustawieniami\s+przegl\p{L}darki|korzystaj\p{L}c\s+z\s+(naszego\s+)?serwisu\s+bez\s+zmiany/iu,
 ];
 
 // --- Slowa, ktorych obecnosc w tytule oznacza ze faktycznie opisuje on

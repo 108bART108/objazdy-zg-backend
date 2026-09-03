@@ -53,6 +53,8 @@ const migrations = [
   'ALTER TABLE local_ads ADD COLUMN expires_at TEXT',
   'ALTER TABLE local_ads ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE utrudnienia ADD COLUMN event_date TEXT',
+  'ALTER TABLE utrudnienia ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE utrudnienia ADD COLUMN review_reasons TEXT',
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (err) { /* kolumna juz istnieje */ }
@@ -92,14 +94,16 @@ try {
 //    appka nie zacznie znowu pokazywac wszystkim wpisom dzisiejszej daty -
 //    po prostu zachowa ostatnia znana, dobra wartosc.
 const upsertStmt = db.prepare(`
-  INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at, event_date)
-  VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, datetime('now')), @event_date)
+  INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at, event_date, needs_review, review_reasons)
+  VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, datetime('now')), @event_date, @needs_review, @review_reasons)
   ON CONFLICT(source_url) DO UPDATE SET
     title = excluded.title,
     street = excluded.street,
     description = excluded.description,
     published_at = COALESCE(@published_at, utrudnienia.published_at),
     event_date = COALESCE(@event_date, utrudnienia.event_date),
+    needs_review = excluded.needs_review,
+    review_reasons = excluded.review_reasons,
     active = 1
 `);
 
@@ -125,23 +129,27 @@ function sanitizePublishedAt(publishedAt) {
 
 function upsertMany(items) {
   const newItems = [];
+  const flaggedItems = [];
   const tx = db.transaction((rows) => {
     for (const row of rows) {
       const alreadyExists = existsStmt.get(row.source_url);
       if (!alreadyExists) newItems.push(row);
+      if (row.needs_review) flaggedItems.push(row);
       upsertStmt.run({
         ...row,
         published_at: sanitizePublishedAt(row.published_at),
         event_date: row.event_date || null,
+        needs_review: row.needs_review ? 1 : 0,
+        review_reasons: row.review_reasons ? row.review_reasons.join('; ') : null,
       });
     }
   });
   tx(items);
-  return { count: items.length, newItems };
+  return { count: items.length, newItems, flaggedItems };
 }
 
 function listUtrudnienia({ category, search, limit = 50 } = {}) {
-  let query = 'SELECT * FROM utrudnienia WHERE active = 1';
+  let query = 'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0';
   const params = {};
 
   if (category && category !== 'all') {
@@ -273,6 +281,26 @@ function markReminderSent(id) {
   db.prepare('UPDATE local_ads SET reminder_sent = 1 WHERE id = ?').run(id);
 }
 
+// Wpisy oznaczone przez qualityCheck jako wymagajace recznego przejrzenia
+// (np. sklejony tekst, tytul-sam-adres, opis wygladajacy na boilerplate).
+// To lista "do sprawdzenia" dla panelu admina.
+function listNeedsReview() {
+  return db.prepare(`
+    SELECT * FROM utrudnienia
+    WHERE needs_review = 1 AND active = 1
+    ORDER BY fetched_at DESC
+  `).all();
+}
+
+// Reczne zatwierdzenie wpisu w adminie - zdejmuje flage needs_review.
+// Jesli w kolejnym cyklu scraper znowu wykryje ten sam problem, flaga
+// wroci (needs_review jest zawsze nadpisywane najswiezsza ocena przy
+// kazdym scrapowaniu) - wiec to zatwierdzenie dziala dopoki zrodlowa
+// strona nie zmieni sie ponownie w ten sam wadliwy sposob.
+function markReviewed(id) {
+  db.prepare('UPDATE utrudnienia SET needs_review = 0, review_reasons = NULL WHERE id = ?').run(id);
+}
+
 module.exports = {
   db,
   upsertMany,
@@ -292,4 +320,6 @@ module.exports = {
   deactivateExpiredAds,
   getAdsNeedingReminder,
   markReminderSent,
+  listNeedsReview,
+  markReviewed,
 };
