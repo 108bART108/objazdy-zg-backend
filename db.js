@@ -57,6 +57,27 @@ for (const sql of migrations) {
   try { db.exec(sql); } catch (err) { /* kolumna juz istnieje */ }
 }
 
+// Jednorazowe naprawienie juz istniejacych wpisow, ktore zdazyly zapisac
+// sie z bledna, przyszla data (np. zaplanowana godzina wylaczenia pradu)
+// jako published_at - zanim wprowadzilismy sanitizePublishedAt(). Mechanizm
+// "samoleczacy" (COALESCE) sam z siebie by tego NIE naprawil, bo dla tych
+// wpisow zawsze bedzie brakowac nowej, pewnej daty (Enea zawsze podaje
+// date zdarzenia w przyszlosci) - wiec bez tej jednorazowej korekty stara,
+// bledna wartosc zostalaby zachowana w nieskonczonosc.
+try {
+  const fixed = db.prepare(`
+    UPDATE utrudnienia
+    SET published_at = fetched_at
+    WHERE published_at IS NOT NULL
+      AND julianday(published_at) - julianday('now') > 1
+  `).run();
+  if (fixed.changes > 0) {
+    console.log(`[db] naprawiono ${fixed.changes} wpisow z blednie zapisana data w przyszlosci`);
+  }
+} catch (err) {
+  console.error('[db] blad jednorazowej naprawy dat:', err.message);
+}
+
 // WAZNE: published_at uzywa COALESCE w dwoch miejscach - to jest mechanizm
 // "samoleczacy" zapobiegajacy powrotowi bledu "data = moment scrapowania":
 //  - Przy NOWYM wpisie (INSERT): jesli scraper nie podal pewnej daty
