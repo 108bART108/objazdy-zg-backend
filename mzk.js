@@ -17,17 +17,56 @@ async function fetchArticleDescription(url) {
     if (!res.ok) return null;
     const html = await res.text();
     const $ = cheerio.load(html);
-    let found = null;
+
+    // Wstaw spacje w miejscu <br>, zeby sklejone linie nie zlepily sie
+    // w jedno slowo po .text() - dotyczy calego dokumentu, nie tylko
+    // wybranego akapitu, bo listy (<ul>) tez czesto uzywaja <br>.
+    $('br').replaceWith(' ');
+
+    // Krok 1: znajdz PIERWSZY sensowny (nie-boilerplate) akapit dluzszy
+    // niz 60 znakow - to nasz kandydat na opis.
+    let $candidate = null;
+    let candidateText = null;
     $('p').each((_, el) => {
-      if (found) return;
+      if (candidateText) return;
       const $el = $(el);
-      // Wstaw spacje w miejscu <br>, zeby sklejone linie (np. nazwa firmy
-      // + adres w tym samym <p>) nie zlepily sie w jedno slowo po .text()
-      $el.find('br').replaceWith(' ');
       const t = $el.text().replace(/\s+/g, ' ').trim();
-      if (t.length > 60 && !BOILERPLATE_RE.test(t)) found = t;
+      if (t.length > 60 && !BOILERPLATE_RE.test(t)) {
+        $candidate = $el;
+        candidateText = t;
+      }
     });
-    return found ? found.slice(0, 400) : null;
+    if (!candidateText) return null;
+
+    // Krok 2: jesli akapit KONCZY SIE DWUKROPKIEM, to prawie na pewno
+    // zapowiada liste, ktora nastepuje zaraz po nim (np. lista linii
+    // autobusowych) - doklejamy ja, zeby nie urywac informacji w polowie.
+    if (/:\s*$/.test(candidateText)) {
+      const $listEl = $candidate.nextAll('ul, ol').first();
+      if ($listEl.length) {
+        const items = [];
+        $listEl.find('li').each((_, li) => {
+          const t = $(li).text().replace(/\s+/g, ' ').trim();
+          if (t) items.push(t);
+        });
+        if (items.length) {
+          candidateText = `${candidateText} ${items.join(', ')}`;
+        }
+      }
+    } else if (candidateText.length < 100) {
+      // Krok 3: jesli akapit jest krotki i NIE konczy sie dwukropkiem
+      // (czyli to raczej niedokonczona/uboga informacja niz zapowiedz
+      // listy), doklejamy jeszcze kolejny sensowny akapit dla kontekstu.
+      const $nextP = $candidate.nextAll('p').first();
+      if ($nextP.length) {
+        const nextText = $nextP.text().replace(/\s+/g, ' ').trim();
+        if (nextText.length > 20 && !BOILERPLATE_RE.test(nextText)) {
+          candidateText = `${candidateText} ${nextText}`;
+        }
+      }
+    }
+
+    return candidateText.slice(0, 400);
   } catch (err) {
     console.error(`[mzk] blad pobierania opisu artykulu (${url}):`, err.message);
     return null;

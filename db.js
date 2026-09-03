@@ -149,7 +149,12 @@ function upsertMany(items) {
 }
 
 function listUtrudnienia({ category, search, limit = 50 } = {}) {
-  let query = 'SELECT * FROM utrudnienia WHERE active = 1';
+  // needs_review = 0: appka pokazuje tylko wpisy, ktore przeszly
+  // automatyczne sprawdzenie jakosci (qualityCheck) bez zastrzezen.
+  // Nie ma tu zadnego recznego kroku - wpis albo przechodzi test przy
+  // scrapowaniu, albo czeka na kolejny cykl, w ktorym scraper moze
+  // wyciagnac lepsza tresc (np. po naprawieniu ekstrakcji zrodla).
+  let query = 'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0';
   const params = {};
 
   if (category && category !== 'all') {
@@ -160,19 +165,14 @@ function listUtrudnienia({ category, search, limit = 50 } = {}) {
     query += ' AND (title LIKE @search OR street LIKE @search OR description LIKE @search)';
     params.search = `%${search}%`;
   }
-  // Sortowanie: wpisy z nadchodzacym (przyszlym) zaplanowanym wydarzeniem
-  // (event_date) ida na sam gore, posortowane od najblizszego terminu -
-  // dzieki temu np. wylaczenie pradu za 2 dni jest widoczne wyzej niz za
-  // 2 tygodnie, niezaleznie od tego, kiedy je odkrylismy. Pozostale wpisy
-  // (bez zaplanowanego terminu, albo juz przeszle) sortowane sa jak
-  // dotychczas - od najnowiej odkrytych.
-  query += `
-    ORDER BY
-      CASE WHEN event_date IS NOT NULL AND date(event_date) >= date('now') THEN 0 ELSE 1 END,
-      CASE WHEN event_date IS NOT NULL AND date(event_date) >= date('now') THEN event_date END ASC,
-      published_at DESC
-    LIMIT @limit
-  `;
+  // Sortowanie: ZAWSZE od najnowiej opublikowanego wpisu do najstarszego,
+  // niezaleznie od tego czy wpis ma zaplanowana przyszla event_date.
+  // event_date sluzy WYLACZNIE do wyswietlenia zoltej plakietki
+  // "Dzisiaj/Jutro/za X dni" na karcie - nie zmienia kolejnosci listy.
+  // (Wczesniej wpisy z przyszla event_date szly na sam gore, co przy
+  // bledzie parsowania daty potrafilo wywindowac stary wpis ponad nowsze
+  // - stąd ta zmiana.)
+  query += ' ORDER BY published_at DESC LIMIT @limit';
   params.limit = limit;
 
   return db.prepare(query).all(params);

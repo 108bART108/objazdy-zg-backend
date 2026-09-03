@@ -37,10 +37,14 @@ function extractPolishDate(text, now = new Date()) {
   let d = new Date(year, month, day);
   if (isNaN(d.getTime())) return null;
 
-  // Brak roku w tekscie i data wypadlaby ponad 60 dni w przeszlosci ->
-  // to prawie na pewno chodzi o przyszly rok (np. "3 stycznia"
-  // wspomniane w grudniu).
-  if (!match[3] && d.getTime() < now.getTime() - 60 * 86400000) {
+  // Brak roku w tekscie: rok "przeskakuje" na przyszly TYLKO gdy data
+  // wypadalaby ponad 300 dni w przeszlosci - to praktycznie jedyny
+  // sensowny sygnal "to na pewno przyszly rok" (np. "3 stycznia"
+  // wspomniane w grudniu). Przy mniejszych odstepach (np. ogloszenie
+  // z lipca czytane we wrzesniu, ~60-90 dni wstecz) to zwykle po prostu
+  // NIEDAWNA przeszlosc - proba "naprawy" na przyszly rok psuje wiecej
+  // niz naprawia (patrz: blad "za 302 dni" dla wpisu o "2 lipca br.").
+  if (!match[3] && d.getTime() < now.getTime() - 300 * 86400000) {
     d = new Date(year + 1, month, day);
   }
   return d;

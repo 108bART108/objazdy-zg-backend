@@ -103,6 +103,13 @@ function qualityCheck(entry) {
   ) {
     reasons.push('opis bardzo krotki i inny niz tytul - moze byc urwany fragment');
   }
+  // Opis konczacy sie dwukropkiem to prawie zawsze zapowiedz listy, ktora
+  // nie zostala wyciagnieta (np. "przywrocone zostana stale trasy linii:"
+  // i tu sie urywa, bo prawdziwa lista linii siedzi w osobnym <ul> na
+  // stronie zrodlowej, ktorego scraper nie zlapal).
+  if (description && /:\s*$/.test(description.trim())) {
+    reasons.push('opis urywa sie na dwukropku - prawdopodobnie brakuje dalszej czesci (np. listy)');
+  }
 
   return {
     ...entry,
