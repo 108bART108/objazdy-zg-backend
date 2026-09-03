@@ -82,13 +82,31 @@ const upsertStmt = db.prepare(`
 
 const existsStmt = db.prepare('SELECT 1 FROM utrudnienia WHERE source_url = ?');
 
+// Data w przyszlosci (ponad dobe od teraz) NIE jest uzywana jako
+// published_at. Taka data zazwyczaj oznacza zaplanowane, jednorazowe
+// wydarzenie (np. godzina planowanego wylaczenia pradu w przyszlym
+// tygodniu), a nie faktyczna date publikacji/odkrycia informacji przez
+// nasz system. W takim przypadku karta w appce ma pokazywac date
+// DZISIEJSZA (kiedy dowiedzielismy sie o tym wydarzeniu) - a szczegoly
+// czasowe samego wydarzenia i tak zostaja w opisie tekstowym wpisu.
+// Dziala to jednolicie dla wszystkich zrodel, bez potrzeby osobnej
+// logiki w kazdym scraperze.
+function sanitizePublishedAt(publishedAt) {
+  if (!publishedAt) return null;
+  const parsed = new Date(publishedAt);
+  if (isNaN(parsed.getTime())) return null;
+  const oneDayFromNow = Date.now() + 86400000;
+  if (parsed.getTime() > oneDayFromNow) return null;
+  return publishedAt;
+}
+
 function upsertMany(items) {
   const newItems = [];
   const tx = db.transaction((rows) => {
     for (const row of rows) {
       const alreadyExists = existsStmt.get(row.source_url);
       if (!alreadyExists) newItems.push(row);
-      upsertStmt.run({ ...row, published_at: row.published_at || null });
+      upsertStmt.run({ ...row, published_at: sanitizePublishedAt(row.published_at) });
     }
   });
   tx(items);

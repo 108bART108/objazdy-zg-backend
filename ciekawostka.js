@@ -73,7 +73,7 @@ ${avoidText}Wazne zasady:
 // poprawnosc jezykowa PO POLSKU oraz wiarygodnosc faktu (z mozliwoscia
 // ponownego wyszukania), zanim tekst trafi do publikacji w appce.
 async function reviewFact(draftText) {
-  const prompt = `Otrzymales nizej ciekawostke o Zielonej Gorze, napisana automatycznie i przeznaczona do publikacji w aplikacji mobilnej. Twoim zadaniem jest jej cicha weryfikacja przed publikacja.
+  const prompt = `Otrzymales nizej ciekawostke o Zielonej Gorze, napisana automatycznie i przeznaczona do publikacji w aplikacji mobilnej. Twoim zadaniem jest jej weryfikacja przed publikacja.
 
 TEKST DO SPRAWDZENIA:
 "${draftText}"
@@ -81,25 +81,27 @@ TEKST DO SPRAWDZENIA:
 Sprawdz TRZY rzeczy:
 1. POPRAWNOSC JEZYKOWA: czy tekst jest napisany poprawna polszczyzna, bez bledow gramatycznych, ortograficznych czy dziwnych/nieistniejacych slow.
 2. WIARYGODNOSC FAKTU: jesli to potrzebne, wyszukaj w internecie i zweryfikuj, czy opisany fakt jest prawdziwy i mozliwy do potwierdzenia w wiarygodnych zrodlach.
-3. JEDEN TEMAT: czy tekst dotyczy TYLKO JEDNEGO tematu/miejsca/wydarzenia. Jesli tekst laczy dwa rozne, niepowiazane fakty w jednym akapicie (np. jedno zdanie o planetarium, a drugie o zupelnie innym pomniku) - to blad do poprawienia: zostaw TYLKO PIERWSZY, glowny temat, a reszte usun.
+3. JEDEN TEMAT: czy tekst dotyczy TYLKO JEDNEGO tematu/miejsca/wydarzenia. Jesli tekst laczy dwa rozne, niepowiazane fakty - to blad: zostaw TYLKO PIERWSZY, glowny temat.
 
-Zasady odpowiedzi - PRZECZYTAJ UWAZNIE:
-- Jesli tekst jest poprawny jezykowo, dotyczy jednego tematu, I fakt jest wiarygodny - zwroc GO BEZ ZMIAN, dokladnie w tej samej formie.
-- Jesli sa bledy jezykowe - popraw WYLACZNIE te bledy, zachowujac reszte tekstu bez zmian.
-- Jesli tekst laczy dwa rozne tematy - zostaw tylko jeden (pierwszy, glowny) watek, usuwajac drugi.
-- Jesli fakt wydaje sie niepewny - albo przeformuluj go na bardziej ostrozne stwierdzenie, albo zwroc inny, prosty i pewny fakt o Zielonej Gorze.
-- TWOJA CALA ODPOWIEDZ MA SKLADAC SIE WYLACZNIE Z GOTOWEGO TEKSTU CIEKAWOSTKI. Nic wiecej.
-- ZABRONIONE w odpowiedzi: jakikolwiek opis Twojego procesu myslenia, zdania typu "Zanim odpowiem", "Musze sprawdzic", "Po analizie", "Sprawdzam wiarygodnosc", naglowki, pogrubienia (**), listy punktowane, wyjasnienia co poprawiles.
-- Napisz odpowiedz TAK, jakbys byl autorem publikujacym gotowa ciekawostke w aplikacji - nie jako recenzent opisujacy swoja prace.
+Mozesz swobodnie opisac swoj tok rozumowania, wyniki wyszukiwania i wnioski - to nie ma znaczenia dla formatu odpowiedzi.
 
-Przyklad DOBREJ odpowiedzi (sam tekst ciekawostki, nic wiecej):
-Zielona Gora bywa nazywana miastem win - lokalna tradycja winiarska siega sredniowiecza.
+WAZNE - FORMAT ODPOWIEDZI: niezaleznie od tego, co napiszesz jako analize, na sam koniec swojej odpowiedzi MUSISZ umiescic finalny, gotowy do publikacji tekst ciekawostki dokladnie w tym formacie, z dokladnie takimi znacznikami:
 
-Przyklad ZLEJ odpowiedzi (nie rob tak - to opis procesu, nie ciekawostka):
-Sprawdzilem ten fakt i moge potwierdzic, ze jest prawdziwy. Oto poprawiona wersja: ...`;
+<ciekawostka>
+(tutaj finalny tekst ciekawostki - jedno lub dwa zdania, bez cudzyslowow, bez wyjasnien)
+</ciekawostka>
+
+Tylko zawartosc miedzy znacznikami <ciekawostka> i </ciekawostka> zostanie opublikowana - Twoja analiza poza znacznikami zostanie calkowicie zignorowana. Znaczniki i ich zawartosc sa OBOWIAZKOWE w kazdej odpowiedzi.
+
+Jesli oryginalny tekst byl juz poprawny i wiarygodny - wstaw go w znacznikach bez zmian. Jesli mial bledy jezykowe - popraw je w wersji w znacznikach. Jesli laczyl dwa tematy - w znacznikach zostaw tylko pierwszy. Jesli fakt byl niepewny - w znacznikach umiesc ostrozniejsze sformulowanie lub inny, pewny fakt.`;
 
   const text = await callClaude(prompt, true);
-  return text.slice(0, 500);
+  const match = text.match(/<ciekawostka>([\s\S]*?)<\/ciekawostka>/i);
+  if (!match) {
+    console.warn('[ciekawostka] recenzent nie uzyl wymaganych znacznikow - odrzucam odpowiedz');
+    return null;
+  }
+  return match[1].trim().slice(0, 500);
 }
 
 // Prosty, niezalezny od modelu filtr bezpieczenstwa: jesli odpowiedz modelu
@@ -125,11 +127,19 @@ async function generateFactViaClaude(avoidList) {
   const draft = await generateFact(avoidList);
   try {
     const reviewed = await reviewFact(draft);
-    if (looksLikeMetaCommentary(reviewed)) {
-      console.warn('[ciekawostka] recenzja wygladala na "tok myslenia" AI - uzywam czystego szkicu z kroku 1');
+    // reviewed === null: recenzent nie uzyl wymaganych znacznikow <ciekawostka>
+    // - odrzucamy cala odpowiedz i uzywamy czystego szkicu z kroku 1.
+    if (!reviewed) {
       return draft;
     }
-    return reviewed || draft;
+    // Dodatkowa siatka bezpieczenstwa: nawet wewnatrz znacznikow model
+    // teoretycznie mogl wpisac fragment swojej analizy - sprawdzamy to
+    // heurystycznie jako druga linia obrony.
+    if (looksLikeMetaCommentary(reviewed)) {
+      console.warn('[ciekawostka] tresc w znacznikach wygladala podejrzanie - uzywam czystego szkicu z kroku 1');
+      return draft;
+    }
+    return reviewed;
   } catch (err) {
     // Jesli krok weryfikacji z jakiegos powodu zawiedzie (np. chwilowy
     // blad API), lepiej opublikowac niezweryfikowany, ale sensowny
