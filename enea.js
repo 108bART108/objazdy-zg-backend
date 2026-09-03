@@ -48,7 +48,9 @@ async function fetchEnea() {
       const description = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 400);
       if (!description) return;
 
-      // Jesli nie uda sie znalezc pelnej polskiej daty - przekazujemy null.
+      // Data zaplanowanego wylaczenia idzie do event_date (uzywana do
+      // sortowania "co nadchodzi"), a NIE do published_at (ktore ma
+      // oznaczac date odkrycia/publikacji przez nas, nie date zdarzenia).
       const parsedDate = parseFullPolishDate(description) || parseFullPolishDate(title);
 
       const hash = crypto.createHash('md5').update(title + description).digest('hex').slice(0, 10);
@@ -60,7 +62,8 @@ async function fetchEnea() {
         title,
         street: extractStreet(description) || extractStreet(title),
         description,
-        published_at: parsedDate ? parsedDate.toISOString() : null,
+        published_at: null,
+        event_date: parsedDate ? parsedDate.toISOString() : null,
       });
     });
   } catch (err) {

@@ -52,6 +52,7 @@ db.exec(`
 const migrations = [
   'ALTER TABLE local_ads ADD COLUMN expires_at TEXT',
   'ALTER TABLE local_ads ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE utrudnienia ADD COLUMN event_date TEXT',
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (err) { /* kolumna juz istnieje */ }
@@ -91,13 +92,14 @@ try {
 //    appka nie zacznie znowu pokazywac wszystkim wpisom dzisiejszej daty -
 //    po prostu zachowa ostatnia znana, dobra wartosc.
 const upsertStmt = db.prepare(`
-  INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at)
-  VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, datetime('now')))
+  INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at, event_date)
+  VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, datetime('now')), @event_date)
   ON CONFLICT(source_url) DO UPDATE SET
     title = excluded.title,
     street = excluded.street,
     description = excluded.description,
     published_at = COALESCE(@published_at, utrudnienia.published_at),
+    event_date = COALESCE(@event_date, utrudnienia.event_date),
     active = 1
 `);
 
@@ -127,7 +129,11 @@ function upsertMany(items) {
     for (const row of rows) {
       const alreadyExists = existsStmt.get(row.source_url);
       if (!alreadyExists) newItems.push(row);
-      upsertStmt.run({ ...row, published_at: sanitizePublishedAt(row.published_at) });
+      upsertStmt.run({
+        ...row,
+        published_at: sanitizePublishedAt(row.published_at),
+        event_date: row.event_date || null,
+      });
     }
   });
   tx(items);
@@ -146,7 +152,19 @@ function listUtrudnienia({ category, search, limit = 50 } = {}) {
     query += ' AND (title LIKE @search OR street LIKE @search OR description LIKE @search)';
     params.search = `%${search}%`;
   }
-  query += ' ORDER BY published_at DESC LIMIT @limit';
+  // Sortowanie: wpisy z nadchodzacym (przyszlym) zaplanowanym wydarzeniem
+  // (event_date) ida na sam gore, posortowane od najblizszego terminu -
+  // dzieki temu np. wylaczenie pradu za 2 dni jest widoczne wyzej niz za
+  // 2 tygodnie, niezaleznie od tego, kiedy je odkrylismy. Pozostale wpisy
+  // (bez zaplanowanego terminu, albo juz przeszle) sortowane sa jak
+  // dotychczas - od najnowiej odkrytych.
+  query += `
+    ORDER BY
+      CASE WHEN event_date IS NOT NULL AND date(event_date) >= date('now') THEN 0 ELSE 1 END,
+      CASE WHEN event_date IS NOT NULL AND date(event_date) >= date('now') THEN event_date END ASC,
+      published_at DESC
+    LIMIT @limit
+  `;
   params.limit = limit;
 
   return db.prepare(query).all(params);

@@ -35,10 +35,17 @@ async function fetchZdw() {
       description = description.replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
       if (!description) return;
 
-      // Jesli nie uda sie znalezc pola "od dnia:" - przekazujemy null
-      // (nie date scrapowania). Baza sama zdecyduje jak to obsluzyc.
+      // Pole "od dnia:" trafia do OBU pol: published_at ORAZ event_date.
+      // Dzieki temu dziala to poprawnie w obu sytuacjach:
+      // - jesli data jest w przeszlosci (prace juz trwaja od jakiegos czasu)
+      //   -> baza uzyje jej jako published_at, pokazujac realny poczatek
+      //      prac zamiast falszywie "swiezej" dzisiejszej daty.
+      // - jesli data jest w przyszlosci (prace jeszcze sie nie zaczely)
+      //   -> baza automatycznie NIE uzyje jej jako published_at (odrzuci
+      //      jako zbyt odlegla), ale zostanie zachowana w event_date i
+      //      appka pokaze plakietke "za X dni" z wyprzedzeniem.
       const odDniaMatch = fullText.match(/od dnia:\s*\|?\s*(\d{4}-\d{2}-\d{2})/i);
-      const publishedAt = odDniaMatch ? new Date(`${odDniaMatch[1]}T00:00:00`).toISOString() : null;
+      const odDniaIso = odDniaMatch ? new Date(`${odDniaMatch[1]}T00:00:00`).toISOString() : null;
 
       const hash = crypto.createHash('md5').update(title + fullText).digest('hex').slice(0, 10);
 
@@ -49,7 +56,8 @@ async function fetchZdw() {
         title,
         street: extractStreet(description) || extractStreet(title),
         description,
-        published_at: publishedAt,
+        published_at: odDniaIso,
+        event_date: odDniaIso,
       });
     });
   } catch (err) {
