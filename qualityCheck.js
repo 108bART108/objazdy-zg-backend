@@ -85,11 +85,23 @@ function qualityCheck(entry) {
   if (titleLacksContext(title)) {
     reasons.push('tytul to sam adres/kod bez informacji o tym co sie stalo');
   }
-  if (description && title && description.trim().toLowerCase() === title.trim().toLowerCase()) {
-    reasons.push('opis identyczny z tytulem - brak realnej dodatkowej tresci');
-  }
-  if (description && description.trim().length < 25) {
-    reasons.push('opis bardzo krotki (ponizej 25 znakow) - moze byc urwany/pusty');
+  // Opis identyczny z tytulem NIE jest sam w sobie problemem - to typowy,
+  // nieszkodliwy fallback gdy scraper nie znalazl na stronie artykulu
+  // dluzszego opisu (patrz mzk.js: description = descriptions[i] || a.title).
+  // Jesli tytul sam w sobie ma kontekst (przeszedl titleLacksContext), to
+  // czytelnik i tak dostaje prawdziwa informacje - nie ma potrzeby ukrywac
+  // wpisu tylko dlatego ze brakuje dodatkowego opisu.
+  //
+  // Prawdziwie "urwany"/zepsuty opis lapiemy tylko gdy jest bardzo krotki
+  // (ponizej 15 znakow) ORAZ rozny od tytulu - bo to sygnalizuje ucieta
+  // ekstrakcje (np. sam fragment zdania), a nie po prostu brak opisu.
+  if (
+    description &&
+    title &&
+    description.trim().toLowerCase() !== title.trim().toLowerCase() &&
+    description.trim().length < 15
+  ) {
+    reasons.push('opis bardzo krotki i inny niz tytul - moze byc urwany fragment');
   }
 
   return {
