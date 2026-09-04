@@ -81,6 +81,35 @@ try {
   console.error('[db] blad jednorazowej naprawy dat:', err.message);
 }
 
+// Jednorazowe posprzatanie juz istniejacych duplikatow tresci (ten sam
+// tytul+opis w tej samej kategorii zapisany jako dwa osobne wiersze -
+// zwykle efekt tego, ze zrodlo publikuje ten sam komunikat dwa razy
+// z drobna, niewidoczna roznica w otaczajacym tekscie, przez co dwa
+// wpisy dostaly rozne source_url/hash). Zostaje wpis z najnizszym id
+// (czyli odkryty jako pierwszy), reszta zostaje dezaktywowana (nie
+// usuwana - zeby nie stracic historii/source_url na wszelki wypadek).
+try {
+  const normalize = (t) => (t || '').toLowerCase().replace(/\s+/g, ' ').replace(/[.,;:…]+$/, '').trim();
+  const rows = db.prepare('SELECT id, category, title, description FROM utrudnienia WHERE active = 1').all();
+  const seen = new Map();
+  const duplicateIds = [];
+  for (const row of rows) {
+    const key = `${row.category}||${normalize(row.title)}||${normalize(row.description)}`;
+    if (seen.has(key)) {
+      duplicateIds.push(row.id);
+    } else {
+      seen.set(key, row.id);
+    }
+  }
+  if (duplicateIds.length) {
+    const placeholders = duplicateIds.map(() => '?').join(',');
+    db.prepare(`UPDATE utrudnienia SET active = 0 WHERE id IN (${placeholders})`).run(...duplicateIds);
+    console.log(`[db] zdezaktywowano ${duplicateIds.length} zdublowanych wpisow (ta sama tresc, rozne source_url)`);
+  }
+} catch (err) {
+  console.error('[db] blad jednorazowego sprzatania duplikatow:', err.message);
+}
+
 // WAZNE: published_at uzywa COALESCE w dwoch miejscach - to jest mechanizm
 // "samoleczacy" zapobiegajacy powrotowi bledu "data = moment scrapowania":
 //  - Przy NOWYM wpisie (INSERT): jesli scraper nie podal pewnej daty
