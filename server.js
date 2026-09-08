@@ -189,6 +189,20 @@ app.post('/api/admin/ads-check', async (req, res) => {
   }
 });
 
+// Codzienne przygotowanie ciekawostki Z WYPRZEDZENIEM, wczesnym rankiem
+// (5:30 czasu polskiego) - zanim ktokolwiek otworzy appke. getTodayFact()
+// samo sprawdza cache (tabela daily_fact) i generuje nowa tresc tylko
+// jesli jeszcze jej nie ma, wiec to bezpieczne w wywolaniu takze wtedy,
+// gdyby z jakiegos powodu ciekawostka na dzis juz istniala. Dzieki temu
+// pierwszy uzytkownik dnia, ktory otworzy zakladke Ciekawostka, dostaje
+// juz gotowa, zapisana w bazie tresc - dokladnie tak szybko jak pozostale
+// kategorie - zamiast czekac na dwuetapowe (generowanie + recenzja)
+// zapytanie do Claude z wyszukiwaniem w internecie na zywo.
+cron.schedule('30 5 * * *', () => {
+  console.log('[cron] przygotowuje dzisiejsza ciekawostke z wyprzedzeniem...');
+  getTodayFact().catch((err) => console.error('[cron] blad przygotowania ciekawostki:', err.message));
+}, { timezone: 'Europe/Warsaw' });
+
 app.listen(PORT, () => {
   console.log(`Objazdy ZG API dziala na porcie ${PORT}`);
 });
@@ -212,3 +226,4 @@ cron.schedule('0 8 * * *', () => {
 }, { timezone: 'Europe/Warsaw' });
 
 scrapeAll().catch((err) => console.error('[start] blad pierwszego scrapowania:', err));
+getTodayFact().catch((err) => console.error('[start] blad przygotowania ciekawostki:', err.message));
