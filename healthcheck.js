@@ -1,4 +1,4 @@
-const { db, getAllSubscriptions } = require('./db');
+const { db, getAllSubscriptions, saveHealthReport } = require('./db');
 const { fetchUmZgora } = require('./umZgora');
 const { fetchHtmlSources } = require('./htmlSources');
 const { fetchEnea } = require('./enea');
@@ -52,6 +52,7 @@ async function runWeeklyHealthCheck() {
   const report = lines.join('\n');
   console.log(`[healthcheck] wynik:\n${report}`);
 
+  saveHealthReport(report, hasProblem);
   await sendReportToSystemSubscribers(report, hasProblem);
   console.log('[healthcheck] koniec przegladu.');
 }

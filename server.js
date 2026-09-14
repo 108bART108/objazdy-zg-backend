@@ -7,6 +7,7 @@ const cron = require('node-cron');
 const {
   listUtrudnienia, db, saveSubscription, deleteSubscription,
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
+  listHealthReports,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
@@ -176,6 +177,13 @@ app.post('/api/admin/healthcheck', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Historia cotygodniowych raportow zdrowia appki - do wyswietlenia w
+// panelu admina, zamiast grzebania w logach Render.
+app.get('/api/admin/health-reports', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  res.json({ items: listHealthReports() });
 });
 
 // Recznie wywolane sprawdzenie wygasajacych/wygaslych reklam (do testow)

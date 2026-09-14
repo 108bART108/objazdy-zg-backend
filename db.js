@@ -47,6 +47,13 @@ db.exec(`
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
+
+  CREATE TABLE IF NOT EXISTS health_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report TEXT NOT NULL,
+    has_problem INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
 `);
 
 const migrations = [
@@ -310,6 +317,25 @@ function markReminderSent(id) {
   db.prepare('UPDATE local_ads SET reminder_sent = 1 WHERE id = ?').run(id);
 }
 
+// Zapisuje cotygodniowy raport zdrowia appki, zeby mozna go bylo pozniej
+// przejrzec w panelu admina zamiast grzebac w logach Render. Trzyma tylko
+// ostatnie 50 raportow (ok. rok przy cotygodniowym cyklu) - usuwa starsze
+// przy kazdym zapisie, zeby tabela nie rosla bez konca.
+function saveHealthReport(report, hasProblem) {
+  db.prepare(`
+    INSERT INTO health_reports (report, has_problem) VALUES (?, ?)
+  `).run(report, hasProblem ? 1 : 0);
+  db.prepare(`
+    DELETE FROM health_reports WHERE id NOT IN (
+      SELECT id FROM health_reports ORDER BY created_at DESC LIMIT 50
+    )
+  `).run();
+}
+
+function listHealthReports(limit = 50) {
+  return db.prepare('SELECT * FROM health_reports ORDER BY created_at DESC LIMIT ?').all(limit);
+}
+
 module.exports = {
   db,
   upsertMany,
@@ -329,4 +355,6 @@ module.exports = {
   deactivateExpiredAds,
   getAdsNeedingReminder,
   markReminderSent,
+  saveHealthReport,
+  listHealthReports,
 };
