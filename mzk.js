@@ -4,7 +4,11 @@ const { qualityCheck } = require('./qualityCheck');
 const { extractPolishDate } = require('./polishDates');
 
 const PAGE_URL = 'https://www.mzk.zgora.pl/aktualnosci';
-const HEADERS = { 'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)' };
+const HEADERS = {
+  'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'pl-PL,pl;q=0.9,en;q=0.8',
+};
 
 // Akapity typu "stopka firmowa" (nazwa spolki, adres, NIP) czesto sa
 // dluzsze niz 60 znakow i pojawiaja sie PRZED wlasciwa trescia komunikatu
