@@ -24,15 +24,22 @@ async function runWeeklyHealthCheck() {
     { name: 'ZWiK', fn: fetchZwik },
     { name: 'MZK', fn: fetchMzk },
     { name: 'Enea', fn: fetchEnea },
-    { name: 'htmlSources (generyczne)', fn: fetchHtmlSources },
+    // htmlSources.js ma celowo pusta liste zrodel (rezerwa na przyszlosc,
+    // patrz komentarz w tym pliku) - 0 wpisow stamtad to normalny,
+    // oczekiwany stan, NIE blad, wiec nie ma flagowac raportu jako problem.
+    { name: 'htmlSources (generyczne)', fn: fetchHtmlSources, allowEmpty: true },
   ];
 
   for (const source of sources) {
     try {
       const items = await source.fn();
       if (items.length === 0) {
-        lines.push(`⚠️ ${source.name}: 0 wpisow`);
-        hasProblem = true;
+        if (source.allowEmpty) {
+          lines.push(`ℹ️ ${source.name}: 0 wpisow (oczekiwane - brak skonfigurowanych zrodel)`);
+        } else {
+          lines.push(`⚠️ ${source.name}: 0 wpisow`);
+          hasProblem = true;
+        }
       } else {
         lines.push(`✅ ${source.name}: ${items.length} wpisow`);
       }
