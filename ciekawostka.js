@@ -126,9 +126,22 @@ function looksLikeMetaCommentary(text) {
     'wyszukam', 'poszukam', 'znajdę teraz', 'znajde teraz', 'sprawdzę teraz',
     'sprawdze teraz', 'teraz sprawdzę', 'teraz sprawdze', 'przeszukam',
     'poszukajmy', 'sprawdźmy', 'sprawdzmy', 'pozwól, że', 'pozwol, ze',
+    // Warianty "opisu wlasnej porazki" - model, zamiast dostarczyc tresc,
+    // opisuje ze nie ma czego opublikowac (dokladnie taki przypadek
+    // przeciekl mimo powyzszych fraz - "Tekst nie zawiera mozliwej do
+    // publikacji tresci - sklada sie wylacznie z narracji procesu...").
+    'nie zawiera', 'brak faktu', 'brak konkretnego', 'nie udało', 'nie udalo',
+    'nie jest możliwe', 'nie jest mozliwe', 'nie znalazłem', 'nie znalazlem',
+    'nie znalazłam', 'nie znalazlam', 'nie mogę', 'nie moge', 'nie potrafię',
+    'nie potrafie', 'przepraszam', 'jako model', 'jako asystent', 'narracji',
+    'do opublikowania', 'do publikacji treści', 'do publikacji tresci',
   ];
   const lower = text.toLowerCase();
-  return suspiciousPhrases.some((p) => lower.includes(p));
+  if (suspiciousPhrases.some((p) => lower.includes(p))) return true;
+  // Zbyt krotki tekst (po ewentualnym obcieciu) to tez sygnal ze cos jest
+  // nie tak - prawdziwa ciekawostka to co najmniej jedno pelne zdanie.
+  if (text.trim().length < 30) return true;
+  return false;
 }
 
 // Automatyczne obciecie zdania-narracji NA POCZATKU tekstu (np. "Wyszukam
@@ -178,6 +191,18 @@ async function generateFactViaClaude(avoidList) {
   if (stripped !== result) {
     console.warn('[ciekawostka] obcieto podejrzane zdanie na poczatku tekstu przed publikacja');
   }
+
+  // OSTATECZNA BRAMKA: jesli tekst nadal wyglada podejrzanie (albo caly
+  // stal sie za krotki po obcieciu) - NIE publikujemy niczego. Zamiast
+  // zgadywac kolejny wzorzec bledu, ktorego jeszcze nie znamy, wolimy
+  // rzucic blad i nie zapisac nic do bazy (getTodayFact po prostu nie
+  // ustawi cache na dzis - kolejna proba, reczna albo z nastepnego crona,
+  // moze sie udac). Lepszy brak ciekawostki dzisiaj niz opublikowanie
+  // kolejnego wariantu wycieku, ktorego filtr jeszcze nie rozpoznaje.
+  if (looksLikeMetaCommentary(stripped)) {
+    throw new Error('Wygenerowany tekst wyglada na niepoprawny (mozliwy wyciek procesu modelu) i zostal odrzucony przed publikacja - sprobuj ponownie.');
+  }
+
   return stripped;
 }
 
