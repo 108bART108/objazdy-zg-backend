@@ -78,10 +78,11 @@ async function reviewFact(draftText) {
 TEKST DO SPRAWDZENIA:
 "${draftText}"
 
-Sprawdz TRZY rzeczy:
+Sprawdz CZTERY rzeczy:
 1. POPRAWNOSC JEZYKOWA: czy tekst jest napisany poprawna polszczyzna, bez bledow gramatycznych, ortograficznych czy dziwnych/nieistniejacych slow.
 2. WIARYGODNOSC FAKTU: jesli to potrzebne, wyszukaj w internecie i zweryfikuj, czy opisany fakt jest prawdziwy i mozliwy do potwierdzenia w wiarygodnych zrodlach.
 3. JEDEN TEMAT: czy tekst dotyczy TYLKO JEDNEGO tematu/miejsca/wydarzenia. Jesli tekst laczy dwa rozne, niepowiazane fakty - to blad: zostaw TYLKO PIERWSZY, glowny temat.
+4. BRAK NARRACJI WLASNEGO PROCESU: czy tekst NIE zaczyna sie (ani nie zawiera nigdzie) zdaniem opisujacym co model "zamierza zrobic" albo "wlasnie robi" (np. "Wyszukam teraz...", "Sprawdzam...", "Poszukajmy..."). To jest BLAD tego samego kalibru co blad jezykowy - taka narracja NIE JEST czescia ciekawostki i musi zostac usunieta, zostaw wylacznie sama tresc faktu.
 
 Mozesz swobodnie opisac swoj tok rozumowania, wyniki wyszukiwania i wnioski - to nie ma znaczenia dla formatu odpowiedzi.
 
@@ -118,35 +119,66 @@ function looksLikeMetaCommentary(text) {
     'po dokladnej analizie', 'sprawdzam', 'sprawdziłem', 'sprawdzilem', 'mogę potwierdzić',
     'moge potwierdzic', 'weryfikacja', 'okazuje się', 'okazuje sie', 'błędy językowo',
     'bledy jezykowo', 'poprawiona wersja', 'oto poprawiona', 'tekst zawiera',
+    // Warianty "narracji zamiaru" - model opisuje CO ZAMIERZA zrobic zamiast
+    // od razu podac gotowa tresc (np. "Wyszukam teraz ciekawostke o...").
+    // Dokladnie taki wyciek trafil kiedys do publikacji, mimo istniejacego
+    // filtra - stad ta rozszerzona lista.
+    'wyszukam', 'poszukam', 'znajdę teraz', 'znajde teraz', 'sprawdzę teraz',
+    'sprawdze teraz', 'teraz sprawdzę', 'teraz sprawdze', 'przeszukam',
+    'poszukajmy', 'sprawdźmy', 'sprawdzmy', 'pozwól, że', 'pozwol, ze',
   ];
   const lower = text.toLowerCase();
   return suspiciousPhrases.some((p) => lower.includes(p));
 }
 
+// Automatyczne obciecie zdania-narracji NA POCZATKU tekstu (np. "Wyszukam
+// teraz ciekawostke o Zielonej Gorze. Wieza Glodowa...") - dziala nawet
+// gdy zarowno krok generowania, jak i recenzji, przepuszcza taki wyciek.
+// To ostatnia, programistyczna linia obrony, niezalezna od tego czy model
+// zastosowal sie do instrukcji w promptach.
+function stripLeadingSuspiciousSentence(text) {
+  if (!text) return text;
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  while (sentences.length > 1 && looksLikeMetaCommentary(sentences[0])) {
+    sentences.shift();
+  }
+  return sentences.join(' ').trim();
+}
+
 async function generateFactViaClaude(avoidList) {
   const draft = await generateFact(avoidList);
+  let result;
   try {
     const reviewed = await reviewFact(draft);
     // reviewed === null: recenzent nie uzyl wymaganych znacznikow <ciekawostka>
     // - odrzucamy cala odpowiedz i uzywamy czystego szkicu z kroku 1.
     if (!reviewed) {
-      return draft;
-    }
-    // Dodatkowa siatka bezpieczenstwa: nawet wewnatrz znacznikow model
-    // teoretycznie mogl wpisac fragment swojej analizy - sprawdzamy to
-    // heurystycznie jako druga linia obrony.
-    if (looksLikeMetaCommentary(reviewed)) {
+      result = draft;
+    } else if (looksLikeMetaCommentary(reviewed)) {
+      // Dodatkowa siatka bezpieczenstwa: nawet wewnatrz znacznikow model
+      // teoretycznie mogl wpisac fragment swojej analizy - sprawdzamy to
+      // heurystycznie jako druga linia obrony.
       console.warn('[ciekawostka] tresc w znacznikach wygladala podejrzanie - uzywam czystego szkicu z kroku 1');
-      return draft;
+      result = draft;
+    } else {
+      result = reviewed;
     }
-    return reviewed;
   } catch (err) {
     // Jesli krok weryfikacji z jakiegos powodu zawiedzie (np. chwilowy
     // blad API), lepiej opublikowac niezweryfikowany, ale sensowny
     // szkic niz nic nie pokazac uzytkownikom.
     console.warn('[ciekawostka] blad weryfikacji, uzywam wersji roboczej:', err.message);
-    return draft;
+    result = draft;
   }
+
+  // Trzecia, programistyczna linia obrony - niezaleznie od tego, KTORA
+  // sciezka powyzej dala wynik, na koniec zawsze probujemy obciac
+  // ewentualne zdanie-narracje na poczatku, zanim tekst trafi do bazy.
+  const stripped = stripLeadingSuspiciousSentence(result);
+  if (stripped !== result) {
+    console.warn('[ciekawostka] obcieto podejrzane zdanie na poczatku tekstu przed publikacja');
+  }
+  return stripped;
 }
 
 async function getTodayFact() {
