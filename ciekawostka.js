@@ -52,21 +52,83 @@ async function callClaude(prompt, useSearch) {
 // KROK 1: generowanie ciekawostki z uzyciem wyszukiwania w internecie.
 async function generateFact(avoidList) {
   const avoidText = avoidList.length
-    ? `Nie powtarzaj zadnej z ponizszych, juz wykorzystanych ciekawostek (mozesz poruszyc podobny temat, ale sformuluj to inaczej i skup sie na innym szczególe):\n${avoidList.map((f) => `- ${f}`).join('\n')}\n\n`
+    ? `ZAKAZ POWTORZEN - ponizej lista tematow juz wykorzystanych w ostatnich tygodniach. Wybierz temat CALKOWICIE INNY. Nie wystarczy przeformulowac zdania czy zmienic szczegolu - chodzi o INNY OBIEKT, INNE WYDARZENIE, INNA OSOBE lub INNE MIEJSCE:\n${avoidList.map((f) => `- ${f}`).join('\n')}\n\n`
     : '';
 
-  const prompt = `Wyszukaj w internecie i podaj jedna, krotka (maksymalnie 2 zdania) ciekawostke o miescie Zielona Gora w wojewodztwie lubuskim w Polsce, lub jego najblizszych okolicach. Moze dotyczyc historii, tradycji winiarskiej, przyrody, znanych mieszkancow, geografii, kultury, sportu lub architektury.
+  const today = new Date().toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Warsaw' });
+
+  const prompt = `Dzisiaj jest ${today}. Wyszukaj w internecie i podaj jedna, krotka (maksymalnie 2 zdania) ciekawostke o miescie Zielona Gora w wojewodztwie lubuskim w Polsce, lub jego najblizszych okolicach.
+
+TEMAT moze dotyczyc:
+- historii, tradycji winiarskiej, przyrody, znanych mieszkancow, geografii, kultury, sportu lub architektury,
+- ALBO biezacych wydarzen w miescie (cos co wlasnie sie dzieje lub niedawno sie wydarzylo),
+- ALBO wydarzen ZAPLANOWANYCH na najblizsze tygodnie (np. festiwal, wystawa, koncert, impreza miejska, rocznica) - w takim przypadku podaj konkretny termin, zeby mieszkaniec wiedzial, kiedy to bedzie.
 
 WAZNE: zanim odpowiesz, sprawdz fakt w co najmniej jednym wiarygodnym zrodle (np. Wikipedia, oficjalna strona miasta zielona-gora.pl, lokalne portale informacyjne, National Geographic Polska). Nie polegaj wylacznie na swojej wiedzy z treningu - realnie wyszukaj i zweryfikuj.
 
 ${avoidText}Wazne zasady:
 - Ciekawostka MUSI dotyczyc TYLKO JEDNEGO tematu, miejsca lub wydarzenia. NIE LACZ dwoch roznych, niepowiazanych ze soba faktow w jednym tekscie (np. nie pisz jednoczesnie o planetarium ORAZ o osobnych pomnikach - to dwa rozne tematy, wybierz TYLKO JEDEN).
-- Podaj WYLACZNIE tresc ciekawostki, bez wstepu, bez powitania, bez cudzyslowow, bez podpisu, bez linkow.
+- ODPOWIEDZ MA ZAWIERAC WYLACZNIE GOTOWA TRESC CIEKAWOSTKI. Absolutnie NIE pisz o tym, co zamierzasz zrobic, czego szukasz, ani czego nie udalo Ci sie znalezc (zakazane sa zdania typu "Wyszukam teraz...", "Sprawdzam...", "Nie znalazlem..."). Pierwsze slowo Twojej odpowiedzi ma byc juz pierwszym slowem ciekawostki.
+- Bez wstepu, bez powitania, bez cudzyslowow, bez podpisu, bez linkow.
 - Pisz wylacznie o faktach, ktore znalazles i zweryfikowales w wyszukanych zrodlach. Jesli nie jestes pewien dokladnej daty, liczby czy nazwiska, sformuluj zdanie ostrozniej (np. "prawdopodobnie", "w XIX wieku", "kilkaset") zamiast podawac falszywie precyzyjne dane.
 - Nie wymyslaj faktow, ktorych nie potwierdzily wyniki wyszukiwania - lepiej podac bardziej ogolna, ale prawdziwa informacje.`;
 
   const text = await callClaude(prompt, true);
   return text.slice(0, 500);
+}
+
+// Programistyczna kontrola powtorzen - nie polegamy wylacznie na tym, ze
+// model zastosuje sie do listy "nie powtarzaj". Porownujemy znaczace slowa
+// (rzeczowniki/nazwy wlasne - w przyblizeniu: slowa dluzsze niz 5 znakow)
+// nowej ciekawostki z kazda z poprzednich. Jesli pokrywaja sie w duzym
+// stopniu, uznajemy to za powtorzenie tematu i odrzucamy.
+const STOPWORDS = new Set([
+  'zielona', 'zielonej', 'gora', 'gorze', 'gory', 'górze', 'góra', 'góry',
+  'miasta', 'miescie', 'mieście', 'miasto', 'ktora', 'ktory', 'ktore',
+  'która', 'który', 'które', 'ktorym', 'którym', 'jednym', 'jedna', 'jeden',
+  'zostal', 'została', 'zostala', 'zostały', 'zostaly', 'najstarszych',
+  'wojewodztwie', 'województwie', 'lubuskim', 'polsce', 'roku', 'wieku',
+]);
+
+// Uproszczony "rdzen" slowa - przycinamy do pierwszych 6 znakow, zeby
+// polska fleksja nie ukrywala powtorzen: "kopula"/"kopula", "planetarium"/
+// "planetariow", "nachylenia"/"nachylenie" to dla czlowieka ten sam temat,
+// ale dla porownania doslownego - rozne slowa. To celowo prymitywna metoda
+// (nie prawdziwy stemmer), ale wystarczajaca do wykrywania powtorzen tematu.
+function stem(word) {
+  return word.length > 6 ? word.slice(0, 6) : word;
+}
+
+function significantWords(text) {
+  return new Set(
+    (text || '')
+      .toLowerCase()
+      .replace(/[^\wżźćąśęłóńĄŚĘŁÓŃŻŹĆ\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 5 && !STOPWORDS.has(w))
+      .map(stem)
+  );
+}
+
+function isTooSimilarToRecent(candidate, recentFacts) {
+  const candidateWords = significantWords(candidate);
+  if (candidateWords.size === 0) return false;
+
+  for (const past of recentFacts) {
+    const pastWords = significantWords(past);
+    if (pastWords.size === 0) continue;
+    let shared = 0;
+    for (const w of candidateWords) {
+      if (pastWords.has(w)) shared++;
+    }
+    // Ponad 40% znaczacych slow wspolnych z ktoramkolwiek poprzednia
+    // ciekawostka = najprawdopodobniej ten sam temat.
+    const overlap = shared / Math.min(candidateWords.size, pastWords.size);
+    if (overlap > 0.4) {
+      return past;
+    }
+  }
+  return null;
 }
 
 // KROK 2: niezalezna weryfikacja tego, co napisal krok 1 - sprawdza
@@ -158,7 +220,10 @@ function stripLeadingSuspiciousSentence(text) {
   return sentences.join(' ').trim();
 }
 
-async function generateFactViaClaude(avoidList) {
+// Pojedyncza proba wygenerowania ciekawostki (generowanie + recenzja +
+// wszystkie filtry). Zwraca gotowy tekst albo rzuca blad, jesli wynik nie
+// nadaje sie do publikacji.
+async function attemptGenerateFact(avoidList) {
   const draft = await generateFact(avoidList);
   let result;
   try {
@@ -192,18 +257,40 @@ async function generateFactViaClaude(avoidList) {
     console.warn('[ciekawostka] obcieto podejrzane zdanie na poczatku tekstu przed publikacja');
   }
 
-  // OSTATECZNA BRAMKA: jesli tekst nadal wyglada podejrzanie (albo caly
-  // stal sie za krotki po obcieciu) - NIE publikujemy niczego. Zamiast
-  // zgadywac kolejny wzorzec bledu, ktorego jeszcze nie znamy, wolimy
-  // rzucic blad i nie zapisac nic do bazy (getTodayFact po prostu nie
-  // ustawi cache na dzis - kolejna proba, reczna albo z nastepnego crona,
-  // moze sie udac). Lepszy brak ciekawostki dzisiaj niz opublikowanie
-  // kolejnego wariantu wycieku, ktorego filtr jeszcze nie rozpoznaje.
   if (looksLikeMetaCommentary(stripped)) {
-    throw new Error('Wygenerowany tekst wyglada na niepoprawny (mozliwy wyciek procesu modelu) i zostal odrzucony przed publikacja - sprobuj ponownie.');
+    throw new Error('tekst wyglada na wyciek procesu modelu');
+  }
+
+  // Programistyczna kontrola powtorzen - niezalezna od tego, czy model
+  // zastosowal sie do listy "nie powtarzaj" w promptcie.
+  const duplicateOf = isTooSimilarToRecent(stripped, avoidList);
+  if (duplicateOf) {
+    throw new Error(`temat powtarza sie z wczesniejsza ciekawostka: "${duplicateOf.slice(0, 80)}..."`);
   }
 
   return stripped;
+}
+
+// Glowna funkcja - probuje kilka razy, zanim sie podda. Dzieki temu
+// pojedyncza nieudana proba (wyciek procesu modelu albo powtorzony temat)
+// nie oznacza od razu braku ciekawostki na dany dzien - kolejne podejscie
+// zwykle konczy sie sukcesem.
+const MAX_ATTEMPTS = 3;
+async function generateFactViaClaude(avoidList) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const fact = await attemptGenerateFact(avoidList);
+      if (attempt > 1) {
+        console.log(`[ciekawostka] sukces w probie ${attempt}/${MAX_ATTEMPTS}`);
+      }
+      return fact;
+    } catch (err) {
+      lastError = err;
+      console.warn(`[ciekawostka] proba ${attempt}/${MAX_ATTEMPTS} nieudana: ${err.message}`);
+    }
+  }
+  throw new Error(`Nie udalo sie wygenerowac poprawnej ciekawostki po ${MAX_ATTEMPTS} probach. Ostatni powod: ${lastError ? lastError.message : 'nieznany'}`);
 }
 
 async function getTodayFact() {
@@ -211,7 +298,7 @@ async function getTodayFact() {
   const cached = getDailyFact(date);
   if (cached) return { date, content: cached.content, generated: false };
 
-  const recentFacts = getRecentFacts(20);
+  const recentFacts = getRecentFacts(60);
   const content = await generateFactViaClaude(recentFacts);
   saveDailyFact(date, content);
   return { date, content, generated: true };
@@ -224,7 +311,7 @@ async function getTodayFact() {
 async function forceRegenerateTodayFact() {
   const date = todayDate();
   deleteDailyFact(date);
-  const recentFacts = getRecentFacts(20);
+  const recentFacts = getRecentFacts(60);
   const content = await generateFactViaClaude(recentFacts);
   saveDailyFact(date, content);
   return { date, content, generated: true };
