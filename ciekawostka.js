@@ -92,6 +92,7 @@ ${avoidText}Wazne zasady:
 - ODPOWIEDZ MA ZAWIERAC WYLACZNIE GOTOWA TRESC CIEKAWOSTKI. Absolutnie NIE pisz o tym, co zamierzasz zrobic, czego szukasz, ani czego nie udalo Ci sie znalezc (zakazane sa zdania typu "Wyszukam teraz...", "Sprawdzam...", "Nie znalazlem..."). Pierwsze slowo Twojej odpowiedzi ma byc juz pierwszym slowem ciekawostki.
 - Bez wstepu, bez powitania, bez cudzyslowow, bez podpisu, bez linkow.
 - Pisz wylacznie o faktach, ktore znalazles i zweryfikowales w wyszukanych zrodlach. Jesli nie jestes pewien dokladnej daty, liczby czy nazwiska, sformuluj zdanie ostrozniej (np. "prawdopodobnie", "w XIX wieku", "kilkaset") zamiast podawac falszywie precyzyjne dane.
+- SZCZEGOLNA OSTROZNOSC PRZY SUPERLATYWACH. Slowa takie jak "pierwszy", "jedyny", "najstarszy", "najwiekszy", "jedno z zaledwie trzech na swiecie" to najczestsze zrodlo falszywych twierdzen - brzmia efektownie, ale rzadko daja sie potwierdzic. Uzyj takiego sformulowania TYLKO wtedy, gdy znalazles je WPROST w wiarygodnym zrodle. Jesli zrodlo tego nie potwierdza jednoznacznie - napisz ostrozniej ("jedna z najstarszych", "jedna z nielicznych") albo opisz fakt bez superlatywu. Prawdziwa, skromniejsza informacja jest lepsza niz efektowna, ale niepewna.
 - Nie wymyslaj faktow, ktorych nie potwierdzily wyniki wyszukiwania - lepiej podac bardziej ogolna, ale prawdziwa informacje.`;
 
   // Bierzemy TYLKO ostatni blok tekstowy - wczesniejsze bloki to
@@ -164,11 +165,12 @@ async function reviewFact(draftText) {
 TEKST DO SPRAWDZENIA:
 "${draftText}"
 
-Sprawdz CZTERY rzeczy:
+Sprawdz PIEC rzeczy:
 1. POPRAWNOSC JEZYKOWA: czy tekst jest napisany poprawna polszczyzna, bez bledow gramatycznych, ortograficznych czy dziwnych/nieistniejacych slow.
 2. WIARYGODNOSC FAKTU: jesli to potrzebne, wyszukaj w internecie i zweryfikuj, czy opisany fakt jest prawdziwy i mozliwy do potwierdzenia w wiarygodnych zrodlach.
 3. JEDEN TEMAT: czy tekst dotyczy TYLKO JEDNEGO tematu/miejsca/wydarzenia. Jesli tekst laczy dwa rozne, niepowiazane fakty - to blad: zostaw TYLKO PIERWSZY, glowny temat.
 4. BRAK NARRACJI WLASNEGO PROCESU: czy tekst NIE zaczyna sie (ani nie zawiera nigdzie) zdaniem opisujacym co model "zamierza zrobic" albo "wlasnie robi" (np. "Wyszukam teraz...", "Sprawdzam...", "Poszukajmy..."). To jest BLAD tego samego kalibru co blad jezykowy - taka narracja NIE JEST czescia ciekawostki i musi zostac usunieta, zostaw wylacznie sama tresc faktu.
+5. SUPERLATYWY - SPRAWDZ JE OSOBNO I OBOWIAZKOWO. Znajdz w tekscie kazde twierdzenie typu "pierwszy", "jedyny", "najstarszy", "najwiekszy", "jedno z zaledwie X na swiecie", "jedyny w Polsce" itp. Dla KAZDEGO z nich WYSZUKAJ W INTERNECIE potwierdzenie. Jesli zrodlo nie potwierdza takiego twierdzenia WPROST - zlagodz je w wersji finalnej ("jedna z najstarszych", "jedna z nielicznych") albo usun superlatyw i zostaw sam fakt. Nie zostawiaj efektownego, ale niepotwierdzonego twierdzenia - to najczestsze zrodlo bledow merytorycznych w tego typu tekstach.
 
 Mozesz swobodnie opisac swoj tok rozumowania, wyniki wyszukiwania i wnioski - to nie ma znaczenia dla formatu odpowiedzi.
 
@@ -180,7 +182,7 @@ WAZNE - FORMAT ODPOWIEDZI: niezaleznie od tego, co napiszesz jako analize, na sa
 
 Tylko zawartosc miedzy znacznikami <ciekawostka> i </ciekawostka> zostanie opublikowana - Twoja analiza poza znacznikami zostanie calkowicie zignorowana. Znaczniki i ich zawartosc sa OBOWIAZKOWE w kazdej odpowiedzi.
 
-Jesli oryginalny tekst byl juz poprawny i wiarygodny - wstaw go w znacznikach bez zmian. Jesli mial bledy jezykowe - popraw je w wersji w znacznikach. Jesli laczyl dwa tematy - w znacznikach zostaw tylko pierwszy. Jesli fakt byl niepewny - w znacznikach umiesc ostrozniejsze sformulowanie lub inny, pewny fakt.`;
+Jesli oryginalny tekst byl juz poprawny i wiarygodny - wstaw go w znacznikach bez zmian. Jesli mial bledy jezykowe - popraw je w wersji w znacznikach. Jesli laczyl dwa tematy - w znacznikach zostaw tylko pierwszy. Jesli fakt byl niepewny - w znacznikach umiesc ostrozniejsze sformulowanie lub inny, pewny fakt. Jesli zawieral superlatyw, ktorego nie udalo sie potwierdzic w zrodlach - w znacznikach umiesc wersje zlagodzona lub bez tego superlatywu.`;
 
   // Tu przeszukujemy PELNY tekst (wszystkie bloki), bo tresc wyznaczaja
   // jednoznaczne znaczniki <ciekawostka> - nie ma ryzyka, ze skleimy
