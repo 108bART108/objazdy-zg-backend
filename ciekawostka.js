@@ -38,15 +38,36 @@ async function callClaude(prompt, useSearch) {
   }
 
   const data = await res.json();
-  const text = (data.content || [])
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join(' ')
+
+  // KLUCZOWE: gdy model korzysta z web_search, API zwraca odpowiedz w
+  // KILKU osobnych blokach, w kolejnosci:
+  //   1. blok "text" z zapowiedzia ("Wyszukuje informacje o...")
+  //   2. blok "server_tool_use" (samo wyszukiwanie)
+  //   3. blok "web_search_tool_result" (wyniki)
+  //   4. blok "text" z WLASCIWA odpowiedzia
+  //
+  // Sklejanie WSZYSTKICH blokow "text" (tak bylo wczesniej) powodowalo,
+  // ze zapowiedz wyszukiwania trwale przyklejala sie przed trescia -
+  // stad publikowane "Wyszukuje informacje o Zielonej Gorze. Budynek
+  // Planetarium...". To nie byl blad modelu, tylko bledny odczyt
+  // odpowiedzi po naszej stronie.
+  //
+  // Bierzemy wiec TYLKO OSTATNI blok tekstowy - to jest finalna
+  // odpowiedz modelu, juz po zakonczeniu wyszukiwania.
+  const textBlocks = (data.content || []).filter((b) => b.type === 'text' && b.text && b.text.trim());
+  if (!textBlocks.length) throw new Error('Pusta odpowiedz z Anthropic API');
+
+  const lastBlock = textBlocks[textBlocks.length - 1].text
     .replace(/\s+/g, ' ')
     .trim();
 
-  if (!text) throw new Error('Pusta odpowiedz z Anthropic API');
-  return text;
+  // Pelny tekst (wszystkie bloki) jest potrzebny tylko tam, gdzie tresc
+  // wyciagamy przez jednoznaczne znaczniki <ciekawostka> - tam sklejenie
+  // jest bezpieczne, bo znaczniki same wyznaczaja granice tresci.
+  const fullText = textBlocks.map((b) => b.text).join(' ').replace(/\s+/g, ' ').trim();
+
+  if (!lastBlock) throw new Error('Pusta odpowiedz z Anthropic API');
+  return { lastBlock, fullText };
 }
 
 // KROK 1: generowanie ciekawostki z uzyciem wyszukiwania w internecie.
@@ -73,8 +94,11 @@ ${avoidText}Wazne zasady:
 - Pisz wylacznie o faktach, ktore znalazles i zweryfikowales w wyszukanych zrodlach. Jesli nie jestes pewien dokladnej daty, liczby czy nazwiska, sformuluj zdanie ostrozniej (np. "prawdopodobnie", "w XIX wieku", "kilkaset") zamiast podawac falszywie precyzyjne dane.
 - Nie wymyslaj faktow, ktorych nie potwierdzily wyniki wyszukiwania - lepiej podac bardziej ogolna, ale prawdziwa informacje.`;
 
-  const text = await callClaude(prompt, true);
-  return text.slice(0, 500);
+  // Bierzemy TYLKO ostatni blok tekstowy - wczesniejsze bloki to
+  // zapowiedzi wyszukiwania ("Wyszukuje informacje o..."), ktore nie sa
+  // czescia odpowiedzi.
+  const { lastBlock } = await callClaude(prompt, true);
+  return lastBlock.slice(0, 500);
 }
 
 // Programistyczna kontrola powtorzen - nie polegamy wylacznie na tym, ze
@@ -158,8 +182,12 @@ Tylko zawartosc miedzy znacznikami <ciekawostka> i </ciekawostka> zostanie opubl
 
 Jesli oryginalny tekst byl juz poprawny i wiarygodny - wstaw go w znacznikach bez zmian. Jesli mial bledy jezykowe - popraw je w wersji w znacznikach. Jesli laczyl dwa tematy - w znacznikach zostaw tylko pierwszy. Jesli fakt byl niepewny - w znacznikach umiesc ostrozniejsze sformulowanie lub inny, pewny fakt.`;
 
-  const text = await callClaude(prompt, true);
-  const match = text.match(/<ciekawostka>([\s\S]*?)<\/ciekawostka>/i);
+  // Tu przeszukujemy PELNY tekst (wszystkie bloki), bo tresc wyznaczaja
+  // jednoznaczne znaczniki <ciekawostka> - nie ma ryzyka, ze skleimy
+  // zapowiedz wyszukiwania z trescia, a znaczniki moga trafic do innego
+  // bloku niz ostatni.
+  const { fullText } = await callClaude(prompt, true);
+  const match = fullText.match(/<ciekawostka>([\s\S]*?)<\/ciekawostka>/i);
   if (!match) {
     console.warn('[ciekawostka] recenzent nie uzyl wymaganych znacznikow - odrzucam odpowiedz');
     return null;
@@ -185,9 +213,11 @@ function looksLikeMetaCommentary(text) {
     // od razu podac gotowa tresc (np. "Wyszukam teraz ciekawostke o...").
     // Dokladnie taki wyciek trafil kiedys do publikacji, mimo istniejacego
     // filtra - stad ta rozszerzona lista.
-    'wyszukam', 'poszukam', 'znajdę teraz', 'znajde teraz', 'sprawdzę teraz',
+    'wyszukam', 'wyszukuję', 'wyszukuje', 'poszukam', 'poszukuję', 'poszukuje',
+    'znajdę teraz', 'znajde teraz', 'sprawdzę teraz',
     'sprawdze teraz', 'teraz sprawdzę', 'teraz sprawdze', 'przeszukam',
     'poszukajmy', 'sprawdźmy', 'sprawdzmy', 'pozwól, że', 'pozwol, ze',
+    'szukam informacji', 'zbieram informacje', 'analizuję', 'analizuje',
     // Warianty "opisu wlasnej porazki" - model, zamiast dostarczyc tresc,
     // opisuje ze nie ma czego opublikowac (dokladnie taki przypadek
     // przeciekl mimo powyzszych fraz - "Tekst nie zawiera mozliwej do
