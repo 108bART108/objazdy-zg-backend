@@ -91,8 +91,9 @@ ${avoidText}Wazne zasady:
 - Ciekawostka MUSI dotyczyc TYLKO JEDNEGO tematu, miejsca lub wydarzenia. NIE LACZ dwoch roznych, niepowiazanych ze soba faktow w jednym tekscie (np. nie pisz jednoczesnie o planetarium ORAZ o osobnych pomnikach - to dwa rozne tematy, wybierz TYLKO JEDEN).
 - ODPOWIEDZ MA ZAWIERAC WYLACZNIE GOTOWA TRESC CIEKAWOSTKI. Absolutnie NIE pisz o tym, co zamierzasz zrobic, czego szukasz, ani czego nie udalo Ci sie znalezc (zakazane sa zdania typu "Wyszukam teraz...", "Sprawdzam...", "Nie znalazlem..."). Pierwsze slowo Twojej odpowiedzi ma byc juz pierwszym slowem ciekawostki.
 - Bez wstepu, bez powitania, bez cudzyslowow, bez podpisu, bez linkow.
+- KONKRETNOSC JEST OBOWIAZKOWA. Ciekawostka musi zawierac co najmniej jeden KONKRETNY szczegol: nazwe wlasna, gatunek, liczbe, date, miejsce albo nazwisko. Czytelnik po przeczytaniu ma WIEDZIEC, o co dokladnie chodzi. ZLE (za ogolne, bezwartosciowe): "Artykul naukowcow dotyczacy populacji zwierzat z Zielonej Gory zostal opublikowany w czasopismie, przyciagajac uwage srodowiska naukowego" - nie wiadomo jakie zwierzeta, co odkryto, ani dlaczego to ciekawe. DOBRZE: "W zielonogorskich parkach zyje okolo 200 nietoperzy z gatunku mroczek pozny, ktore zimuja w piwnicach dawnych kamienic". Unikaj pustych zwrotow typu "przyciagajac uwage", "cieszy sie zainteresowaniem", "jest wartym uwagi miejscem" - one nie niosa zadnej informacji.
 - Pisz wylacznie o faktach, ktore znalazles i zweryfikowales w wyszukanych zrodlach. Jesli nie jestes pewien dokladnej daty, liczby czy nazwiska, sformuluj zdanie ostrozniej (np. "prawdopodobnie", "w XIX wieku", "kilkaset") zamiast podawac falszywie precyzyjne dane.
-- SZCZEGOLNA OSTROZNOSC PRZY SUPERLATYWACH. Slowa takie jak "pierwszy", "jedyny", "najstarszy", "najwiekszy", "jedno z zaledwie trzech na swiecie" to najczestsze zrodlo falszywych twierdzen - brzmia efektownie, ale rzadko daja sie potwierdzic. Uzyj takiego sformulowania TYLKO wtedy, gdy znalazles je WPROST w wiarygodnym zrodle. Jesli zrodlo tego nie potwierdza jednoznacznie - napisz ostrozniej ("jedna z najstarszych", "jedna z nielicznych") albo opisz fakt bez superlatywu. Prawdziwa, skromniejsza informacja jest lepsza niz efektowna, ale niepewna.
+- SZCZEGOLNA OSTROZNOSC PRZY SUPERLATYWACH. Slowa takie jak "pierwszy", "jedyny", "najstarszy", "najwiekszy", "jedno z zaledwie trzech na swiecie" to najczestsze zrodlo falszywych twierdzen - brzmia efektownie, ale rzadko daja sie potwierdzic. Uzyj takiego sformulowania TYLKO wtedy, gdy znalazles je WPROST w wiarygodnym zrodle. Jesli zrodlo tego nie potwierdza jednoznacznie - napisz ostrozniej ("jedna z najstarszych", "jedna z nielicznych") albo opisz fakt bez superlatywu. UWAGA: ta ostroznosc dotyczy WYLACZNIE przesadzonych twierdzen o wyjatkowosci - NIE jest usprawiedliwieniem dla pisania ogolnikow. Nadal masz podac konkretne szczegoly (patrz zasada o konkretnosci powyzej), tylko bez nieuzasadnionych superlatywow.
 - Nie wymyslaj faktow, ktorych nie potwierdzily wyniki wyszukiwania - lepiej podac bardziej ogolna, ale prawdziwa informacje.`;
 
   // Bierzemy TYLKO ostatni blok tekstowy - wczesniejsze bloki to
@@ -100,6 +101,42 @@ ${avoidText}Wazne zasady:
   // czescia odpowiedzi.
   const { lastBlock } = await callClaude(prompt, true);
   return lastBlock.slice(0, 500);
+}
+
+// Programistyczna kontrola KONKRETNOSCI - niezalezna od tego, czy model
+// zastosowal sie do instrukcji. Odrzucamy teksty, ktore nic nie mowia
+// czytelnikowi: albo sa zbudowane z pustych zwrotow, albo nie zawieraja
+// zadnego konkretu (liczby, daty, nazwy wlasnej).
+const EMPTY_PHRASES = [
+  'przyciągając uwagę', 'przyciagajac uwage', 'cieszy się zainteresowaniem',
+  'cieszy sie zainteresowaniem', 'wartym uwagi', 'warte uwagi',
+  'zwraca uwagę', 'zwraca uwage', 'budzi zainteresowanie',
+  'jest interesującym', 'jest interesujacym', 'stanowi ciekawy',
+  'zasługuje na uwagę', 'zasluguje na uwage',
+];
+
+function looksTooVague(text) {
+  if (!text) return true;
+  const lower = text.toLowerCase();
+
+  // Puste zwroty-wypelniacze
+  if (EMPTY_PHRASES.some((p) => lower.includes(p))) return true;
+
+  // Czy jest JAKIKOLWIEK konkret? Liczba (rok, ilosc) albo nazwa wlasna
+  // (slowo z wielkiej litery, min. 3 litery). Pierwsze slowo tez liczymy -
+  // nazwa wlasna czesto otwiera zdanie ("Falubaz...", "Palmiarnia...").
+  // Glowna ochrone przed ogolnikami daje i tak lista pustych zwrotow wyzej.
+  const hasNumber = /\d/.test(text);
+  const words = text.split(/\s+/);
+  const properNouns = words.filter((w) => /^[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]{2,}/.test(w));
+  // "Zielona"/"Gorze" wystepuja prawie zawsze - nie licza sie jako konkret.
+  const meaningfulProperNouns = properNouns.filter(
+    (w) => !/^(Zielon|Gór|Gor|Polsc|Polsk|Lubusk)/.test(w)
+  );
+
+  if (!hasNumber && meaningfulProperNouns.length === 0) return true;
+
+  return false;
 }
 
 // Programistyczna kontrola powtorzen - nie polegamy wylacznie na tym, ze
@@ -165,12 +202,13 @@ async function reviewFact(draftText) {
 TEKST DO SPRAWDZENIA:
 "${draftText}"
 
-Sprawdz PIEC rzeczy:
+Sprawdz SZESC rzeczy:
 1. POPRAWNOSC JEZYKOWA: czy tekst jest napisany poprawna polszczyzna, bez bledow gramatycznych, ortograficznych czy dziwnych/nieistniejacych slow.
 2. WIARYGODNOSC FAKTU: jesli to potrzebne, wyszukaj w internecie i zweryfikuj, czy opisany fakt jest prawdziwy i mozliwy do potwierdzenia w wiarygodnych zrodlach.
 3. JEDEN TEMAT: czy tekst dotyczy TYLKO JEDNEGO tematu/miejsca/wydarzenia. Jesli tekst laczy dwa rozne, niepowiazane fakty - to blad: zostaw TYLKO PIERWSZY, glowny temat.
 4. BRAK NARRACJI WLASNEGO PROCESU: czy tekst NIE zaczyna sie (ani nie zawiera nigdzie) zdaniem opisujacym co model "zamierza zrobic" albo "wlasnie robi" (np. "Wyszukam teraz...", "Sprawdzam...", "Poszukajmy..."). To jest BLAD tego samego kalibru co blad jezykowy - taka narracja NIE JEST czescia ciekawostki i musi zostac usunieta, zostaw wylacznie sama tresc faktu.
 5. SUPERLATYWY - SPRAWDZ JE OSOBNO I OBOWIAZKOWO. Znajdz w tekscie kazde twierdzenie typu "pierwszy", "jedyny", "najstarszy", "najwiekszy", "jedno z zaledwie X na swiecie", "jedyny w Polsce" itp. Dla KAZDEGO z nich WYSZUKAJ W INTERNECIE potwierdzenie. Jesli zrodlo nie potwierdza takiego twierdzenia WPROST - zlagodz je w wersji finalnej ("jedna z najstarszych", "jedna z nielicznych") albo usun superlatyw i zostaw sam fakt. Nie zostawiaj efektownego, ale niepotwierdzonego twierdzenia - to najczestsze zrodlo bledow merytorycznych w tego typu tekstach.
+6. KONKRETNOSC - CZY CZYTELNIK CZEGOKOLWIEK SIE DOWIADUJE. Zadaj sobie pytanie: czy po przeczytaniu tego tekstu wiem, o co DOKLADNIE chodzi? Tekst MUSI zawierac konkretny szczegol: nazwe wlasna, gatunek, liczbe, date, miejsce albo nazwisko. Jesli tekst jest ogolnikowy i nic nie mowi (np. "Artykul naukowcow dotyczacy populacji zwierzat z Zielonej Gory zostal opublikowany w czasopismie, przyciagajac uwage srodowiska naukowego" - nie wiadomo jakie zwierzeta ani co odkryto), to JEST TO BLAD. W takim przypadku WYSZUKAJ W INTERNECIE brakujace szczegoly i w znacznikach umiesc wersje KONKRETNA. Jesli nie da sie znalezc szczegolow - napisz w znacznikach CALKIEM INNA, konkretna ciekawostke o Zielonej Gorze. Usun tez puste zwroty typu "przyciagajac uwage", "cieszy sie zainteresowaniem" - one nie niosa informacji.
 
 Mozesz swobodnie opisac swoj tok rozumowania, wyniki wyszukiwania i wnioski - to nie ma znaczenia dla formatu odpowiedzi.
 
@@ -291,6 +329,12 @@ async function attemptGenerateFact(avoidList) {
 
   if (looksLikeMetaCommentary(stripped)) {
     throw new Error('tekst wyglada na wyciek procesu modelu');
+  }
+
+  // Programistyczna kontrola KONKRETNOSCI - odrzucamy ogolniki, ktore nic
+  // nie mowia czytelnikowi (retry dostanie szanse na lepszy tekst).
+  if (looksTooVague(stripped)) {
+    throw new Error('tekst jest zbyt ogolnikowy - brak konkretow albo puste zwroty');
   }
 
   // Programistyczna kontrola powtorzen - niezalezna od tego, czy model
