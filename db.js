@@ -62,6 +62,7 @@ const migrations = [
   'ALTER TABLE utrudnienia ADD COLUMN event_date TEXT',
   'ALTER TABLE utrudnienia ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE utrudnienia ADD COLUMN review_reasons TEXT',
+  'ALTER TABLE daily_fact ADD COLUMN source_url TEXT',
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (err) { /* kolumna juz istnieje */ }
@@ -222,11 +223,13 @@ function deleteDailyFact(date) {
   db.prepare('DELETE FROM daily_fact WHERE fact_date = ?').run(date);
 }
 
-function saveDailyFact(date, content) {
+// sourceUrl - zweryfikowany link do zrodla ciekawostki (moze byc null
+// dla starszych wpisow sprzed wprowadzenia zrodel).
+function saveDailyFact(date, content, sourceUrl = null) {
   db.prepare(`
-    INSERT INTO daily_fact (fact_date, content) VALUES (@date, @content)
-    ON CONFLICT(fact_date) DO UPDATE SET content = excluded.content
-  `).run({ date, content });
+    INSERT INTO daily_fact (fact_date, content, source_url) VALUES (@date, @content, @sourceUrl)
+    ON CONFLICT(fact_date) DO UPDATE SET content = excluded.content, source_url = excluded.source_url
+  `).run({ date, content, sourceUrl });
 }
 
 function getRecentFacts(limit = 20) {

@@ -17,7 +17,8 @@ async function callClaude(prompt, useSearch) {
 
   const body = {
     model: MODEL,
-    max_tokens: 700,
+    // Wiecej miejsca: dluzsza tresc (2-4 zdania) + znaczniki + zrodlo.
+    max_tokens: 1500,
     messages: [{ role: 'user', content: prompt }],
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -66,8 +67,20 @@ async function callClaude(prompt, useSearch) {
   // jest bezpieczne, bo znaczniki same wyznaczaja granice tresci.
   const fullText = textBlocks.map((b) => b.text).join(' ').replace(/\s+/g, ' ').trim();
 
+  // Adresy stron, ktore wyszukiwarka FAKTYCZNIE zwrocila w tym wywolaniu.
+  // Sluza do weryfikacji zrodla: link podany przez model musi pochodzic
+  // z tej listy - inaczej mogl zostac zmyslony.
+  const searchUrls = [];
+  for (const block of data.content || []) {
+    if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
+      for (const r of block.content) {
+        if (r && r.url) searchUrls.push(r.url);
+      }
+    }
+  }
+
   if (!lastBlock) throw new Error('Pusta odpowiedz z Anthropic API');
-  return { lastBlock, fullText };
+  return { lastBlock, fullText, searchUrls };
 }
 
 // KROK 1: generowanie ciekawostki z uzyciem wyszukiwania w internecie.
@@ -78,29 +91,61 @@ async function generateFact(avoidList) {
 
   const today = new Date().toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Warsaw' });
 
-  const prompt = `Dzisiaj jest ${today}. Wyszukaj w internecie i podaj jedna, krotka (maksymalnie 2 zdania) ciekawostke o miescie Zielona Gora w wojewodztwie lubuskim w Polsce, lub jego najblizszych okolicach.
+  const prompt = `Dzisiaj jest ${today}. Wyszukaj w internecie i podaj jedna ciekawostke o miescie Zielona Gora w wojewodztwie lubuskim w Polsce, lub jego najblizszych okolicach.
+
+DLUGOSC I BUDOWA: 3-4 zdania, okolo 300-500 znakow. Pierwsze zdanie podaje glowny fakt. Kolejne zdania daja KONTEKST: tlo historyczne, szczegoly, liczby, dlaczego to ciekawe albo co z tego wynika dla mieszkanca. Czytelnik ma sie czegos naprawde dowiedziec, a nie dostac jedno suche zdanie.
 
 TEMAT moze dotyczyc:
 - historii, tradycji winiarskiej, przyrody, znanych mieszkancow, geografii, kultury, sportu lub architektury,
 - ALBO biezacych wydarzen w miescie (cos co wlasnie sie dzieje lub niedawno sie wydarzylo),
 - ALBO wydarzen ZAPLANOWANYCH na najblizsze tygodnie (np. festiwal, wystawa, koncert, impreza miejska, rocznica) - w takim przypadku podaj konkretny termin, zeby mieszkaniec wiedzial, kiedy to bedzie.
 
+CZAS WYDARZEN - PORÓWNAJ Z DZISIEJSZA DATA (${today}):
+- Wydarzenie, ktore JUZ SIE ODBYLO, opisuj WYLACZNIE w czasie przeszlym ("odbyl sie", "zwyciezyl", "zgromadzil"). Nigdy nie pisz "odbedzie sie" o czyms, co juz minelo.
+- Jako NADCHODZACE przedstawiaj tylko wydarzenia, ktorych termin jest PO dzisiejszej dacie.
+- Jesli nie masz pewnosci, czy wydarzenie juz sie odbylo - wybierz inny temat.
+
 WAZNE: zanim odpowiesz, sprawdz fakt w co najmniej jednym wiarygodnym zrodle (np. Wikipedia, oficjalna strona miasta zielona-gora.pl, lokalne portale informacyjne, National Geographic Polska). Nie polegaj wylacznie na swojej wiedzy z treningu - realnie wyszukaj i zweryfikuj.
 
 ${avoidText}Wazne zasady:
 - Ciekawostka MUSI dotyczyc TYLKO JEDNEGO tematu, miejsca lub wydarzenia. NIE LACZ dwoch roznych, niepowiazanych ze soba faktow w jednym tekscie (np. nie pisz jednoczesnie o planetarium ORAZ o osobnych pomnikach - to dwa rozne tematy, wybierz TYLKO JEDEN).
-- ODPOWIEDZ MA ZAWIERAC WYLACZNIE GOTOWA TRESC CIEKAWOSTKI. Absolutnie NIE pisz o tym, co zamierzasz zrobic, czego szukasz, ani czego nie udalo Ci sie znalezc (zakazane sa zdania typu "Wyszukam teraz...", "Sprawdzam...", "Nie znalazlem..."). Pierwsze slowo Twojej odpowiedzi ma byc juz pierwszym slowem ciekawostki.
-- Bez wstepu, bez powitania, bez cudzyslowow, bez podpisu, bez linkow.
+- W TRESCI CIEKAWOSTKI nie pisz o tym, co zamierzasz zrobic, czego szukasz, ani czego nie udalo Ci sie znalezc (zakazane sa zdania typu "Wyszukam teraz...", "Sprawdzam...", "Nie znalazlem..."). Tresc zaczyna sie od wielkiej litery i od razu od faktu.
+- W tresci: bez wstepu, bez powitania, bez cudzyslowow, bez podpisu, bez linkow (link podajesz osobno, patrz nizej).
+- ZRODLO JEST OBOWIAZKOWE. Podaj pelny adres URL KONKRETNEJ strony (nie strony glownej serwisu), na ktorej ZNALAZLES ten fakt w wynikach wyszukiwania. Adres musi pochodzic z Twoich wynikow wyszukiwania - nie wolno go zgadywac ani skladac z pamieci. Wybieraj wiarygodne zrodla: oficjalne strony instytucji i miasta (zielona-gora.pl), uczelnie, muzea, znane portale informacyjne (np. lokalne media, gazety), Wikipedia. NIE uzywaj forow, mediow spolecznosciowych, anonimowych blogow ani stron z tresciami generowanymi automatycznie. Strona musi potwierdzac WSZYSTKIE konkretne dane z ciekawostki (daty, liczby, nazwy).
 - KONKRETNOSC JEST OBOWIAZKOWA. Ciekawostka musi zawierac co najmniej jeden KONKRETNY szczegol: nazwe wlasna, gatunek, liczbe, date, miejsce albo nazwisko. Czytelnik po przeczytaniu ma WIEDZIEC, o co dokladnie chodzi. ZLE (za ogolne, bezwartosciowe): "Artykul naukowcow dotyczacy populacji zwierzat z Zielonej Gory zostal opublikowany w czasopismie, przyciagajac uwage srodowiska naukowego" - nie wiadomo jakie zwierzeta, co odkryto, ani dlaczego to ciekawe. DOBRZE: "W zielonogorskich parkach zyje okolo 200 nietoperzy z gatunku mroczek pozny, ktore zimuja w piwnicach dawnych kamienic". Unikaj pustych zwrotow typu "przyciagajac uwage", "cieszy sie zainteresowaniem", "jest wartym uwagi miejscem" - one nie niosa zadnej informacji.
 - Pisz wylacznie o faktach, ktore znalazles i zweryfikowales w wyszukanych zrodlach. Jesli nie jestes pewien dokladnej daty, liczby czy nazwiska, sformuluj zdanie ostrozniej (np. "prawdopodobnie", "w XIX wieku", "kilkaset") zamiast podawac falszywie precyzyjne dane.
 - SZCZEGOLNA OSTROZNOSC PRZY SUPERLATYWACH. Slowa takie jak "pierwszy", "jedyny", "najstarszy", "najwiekszy", "jedno z zaledwie trzech na swiecie" to najczestsze zrodlo falszywych twierdzen - brzmia efektownie, ale rzadko daja sie potwierdzic. Uzyj takiego sformulowania TYLKO wtedy, gdy znalazles je WPROST w wiarygodnym zrodle. Jesli zrodlo tego nie potwierdza jednoznacznie - napisz ostrozniej ("jedna z najstarszych", "jedna z nielicznych") albo opisz fakt bez superlatywu. UWAGA: ta ostroznosc dotyczy WYLACZNIE przesadzonych twierdzen o wyjatkowosci - NIE jest usprawiedliwieniem dla pisania ogolnikow. Nadal masz podac konkretne szczegoly (patrz zasada o konkretnosci powyzej), tylko bez nieuzasadnionych superlatywow.
-- Nie wymyslaj faktow, ktorych nie potwierdzily wyniki wyszukiwania - lepiej podac bardziej ogolna, ale prawdziwa informacje.`;
+- Nie wymyslaj faktow, ktorych nie potwierdzily wyniki wyszukiwania.
 
-  // Bierzemy TYLKO ostatni blok tekstowy - wczesniejsze bloki to
-  // zapowiedzi wyszukiwania ("Wyszukuje informacje o..."), ktore nie sa
-  // czescia odpowiedzi.
-  const { lastBlock } = await callClaude(prompt, true);
-  return lastBlock.slice(0, 500);
+FORMAT ODPOWIEDZI - na koniec odpowiedzi umiesc dokladnie:
+<ciekawostka>
+(tresc ciekawostki, 3-4 zdania)
+</ciekawostka>
+<zrodlo>
+(pelny adres URL strony zrodlowej, zaczynajacy sie od https://)
+</zrodlo>
+
+Wszystko poza tymi znacznikami zostanie zignorowane.`;
+
+  // Tresc i zrodlo wyciagamy ze znacznikow - wszystko poza nimi (w tym
+  // ewentualne zapowiedzi wyszukiwania) jest ignorowane.
+  const { fullText, searchUrls } = await callClaude(prompt, true);
+  const parsed = parseTaggedFact(fullText);
+  if (!parsed) throw new Error('model nie uzyl wymaganych znacznikow <ciekawostka>/<zrodlo>');
+  return { ...parsed, searchUrls };
+}
+
+// Wyciaga tresc i zrodlo ze znacznikow. Zwraca null, jesli brakuje tresci.
+function parseTaggedFact(fullText) {
+  const textMatch = fullText.match(/<ciekawostka>([\s\S]*?)<\/ciekawostka>/i);
+  if (!textMatch) return null;
+  const sourceMatch = fullText.match(/<zrodlo>([\s\S]*?)<\/zrodlo>/i);
+  const rawSource = sourceMatch ? sourceMatch[1].trim() : '';
+  const urlMatch = rawSource.match(/https?:\/\/[^\s<>"')\]]+/i);
+  return {
+    text: textMatch[1].replace(/\s+/g, ' ').trim().slice(0, 900),
+    sourceUrl: urlMatch ? urlMatch[0].replace(/[.,;:]+$/, '') : null,
+  };
 }
 
 // Programistyczna kontrola KONKRETNOSCI - niezalezna od tego, czy model
@@ -196,29 +241,38 @@ function isTooSimilarToRecent(candidate, recentFacts) {
 // KROK 2: niezalezna weryfikacja tego, co napisal krok 1 - sprawdza
 // poprawnosc jezykowa PO POLSKU oraz wiarygodnosc faktu (z mozliwoscia
 // ponownego wyszukania), zanim tekst trafi do publikacji w appce.
-async function reviewFact(draftText) {
-  const prompt = `Otrzymales nizej ciekawostke o Zielonej Gorze, napisana automatycznie i przeznaczona do publikacji w aplikacji mobilnej. Twoim zadaniem jest jej weryfikacja przed publikacja.
+async function reviewFact(draft) {
+  const today = new Date().toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Warsaw' });
+  const prompt = `Dzisiaj jest ${today}. Otrzymales nizej ciekawostke o Zielonej Gorze, napisana automatycznie i przeznaczona do publikacji w aplikacji mobilnej, razem z podanym zrodlem. Twoim zadaniem jest jej NIEZALEZNA weryfikacja przed publikacja - nie ufaj autorowi, sprawdz wszystko sam.
 
 TEKST DO SPRAWDZENIA:
-"${draftText}"
+"${draft.text}"
 
-Sprawdz SZESC rzeczy:
+PODANE ZRODLO:
+${draft.sourceUrl || '(brak zrodla)'}
+
+Sprawdz OSIEM rzeczy:
 1. POPRAWNOSC JEZYKOWA: czy tekst jest napisany poprawna polszczyzna, bez bledow gramatycznych, ortograficznych czy dziwnych/nieistniejacych slow.
 2. WIARYGODNOSC FAKTU: jesli to potrzebne, wyszukaj w internecie i zweryfikuj, czy opisany fakt jest prawdziwy i mozliwy do potwierdzenia w wiarygodnych zrodlach.
 3. JEDEN TEMAT: czy tekst dotyczy TYLKO JEDNEGO tematu/miejsca/wydarzenia. Jesli tekst laczy dwa rozne, niepowiazane fakty - to blad: zostaw TYLKO PIERWSZY, glowny temat.
 4. BRAK NARRACJI WLASNEGO PROCESU: czy tekst NIE zaczyna sie (ani nie zawiera nigdzie) zdaniem opisujacym co model "zamierza zrobic" albo "wlasnie robi" (np. "Wyszukam teraz...", "Sprawdzam...", "Poszukajmy..."). To jest BLAD tego samego kalibru co blad jezykowy - taka narracja NIE JEST czescia ciekawostki i musi zostac usunieta, zostaw wylacznie sama tresc faktu.
 5. SUPERLATYWY - SPRAWDZ JE OSOBNO I OBOWIAZKOWO. Znajdz w tekscie kazde twierdzenie typu "pierwszy", "jedyny", "najstarszy", "najwiekszy", "jedno z zaledwie X na swiecie", "jedyny w Polsce" itp. Dla KAZDEGO z nich WYSZUKAJ W INTERNECIE potwierdzenie. Jesli zrodlo nie potwierdza takiego twierdzenia WPROST - zlagodz je w wersji finalnej ("jedna z najstarszych", "jedna z nielicznych") albo usun superlatyw i zostaw sam fakt. Nie zostawiaj efektownego, ale niepotwierdzonego twierdzenia - to najczestsze zrodlo bledow merytorycznych w tego typu tekstach.
-6. KONKRETNOSC - CZY CZYTELNIK CZEGOKOLWIEK SIE DOWIADUJE. Zadaj sobie pytanie: czy po przeczytaniu tego tekstu wiem, o co DOKLADNIE chodzi? Tekst MUSI zawierac konkretny szczegol: nazwe wlasna, gatunek, liczbe, date, miejsce albo nazwisko. Jesli tekst jest ogolnikowy i nic nie mowi (np. "Artykul naukowcow dotyczacy populacji zwierzat z Zielonej Gory zostal opublikowany w czasopismie, przyciagajac uwage srodowiska naukowego" - nie wiadomo jakie zwierzeta ani co odkryto), to JEST TO BLAD. W takim przypadku WYSZUKAJ W INTERNECIE brakujace szczegoly i w znacznikach umiesc wersje KONKRETNA. Jesli nie da sie znalezc szczegolow - napisz w znacznikach CALKIEM INNA, konkretna ciekawostke o Zielonej Gorze. Usun tez puste zwroty typu "przyciagajac uwage", "cieszy sie zainteresowaniem" - one nie niosa informacji.
+6. KONKRETNOSC - CZY CZYTELNIK CZEGOKOLWIEK SIE DOWIADUJE. Zadaj sobie pytanie: czy po przeczytaniu tego tekstu wiem, o co DOKLADNIE chodzi? Tekst MUSI zawierac konkretny szczegol: nazwe wlasna, gatunek, liczbe, date, miejsce albo nazwisko. Jesli tekst jest ogolnikowy i nic nie mowi (np. "Artykul naukowcow dotyczacy populacji zwierzat z Zielonej Gory zostal opublikowany w czasopismie, przyciagajac uwage srodowiska naukowego" - nie wiadomo jakie zwierzeta ani co odkryto), to JEST TO BLAD. W takim przypadku WYSZUKAJ W INTERNECIE brakujace szczegoly i w znacznikach umiesc wersje KONKRETNA. Jesli nie da sie znalezc szczegolow - napisz w znacznikach CALKIEM INNA, konkretna ciekawostke o Zielonej Gorze. Usun tez puste zwroty typu "przyciagajac uwage", "cieszy sie zainteresowaniem" - one nie niosa informacji. Tekst powinien miec 3-4 zdania z kontekstem - jesli jest za krotki (jedno suche zdanie), dopisz na podstawie zrodel tlo i szczegoly.
+7. CZAS WZGLEDEM DZISIEJSZEJ DATY (${today}). Jesli tekst dotyczy wydarzenia z konkretna data - sprawdz, czy ta data jest PRZED czy PO dzisiejszym dniu. Wydarzenie, ktore juz sie odbylo, NIE MOZE byc opisane w czasie przyszlym ("odbedzie sie", "rozpocznie sie"). Jesli tak jest - przepisz tekst w czasie przeszlym, najlepiej z wynikiem lub przebiegiem wydarzenia (wyszukaj go). Jesli nie da sie ustalic, czy wydarzenie juz sie odbylo - napisz inna ciekawostke.
+8. ZRODLO - SPRAWDZ JE NIEZALEZNIE. Wyszukaj w internecie podany adres albo temat i ustal: (a) czy strona istnieje i pochodzi z wiarygodnego serwisu (oficjalna instytucja, uczelnia, muzeum, znane medium, Wikipedia - NIE forum, social media, anonimowy blog, farma tresci), (b) czy ta konkretna strona potwierdza WSZYSTKIE dane z tekstu (daty, liczby, nazwy). Potwierdz fakt w CO NAJMNIEJ DWOCH niezaleznych zrodlach. Jesli podane zrodlo jest niewiarygodne albo nie potwierdza faktu - znajdz lepsze zrodlo i podaj je. Jesli faktu nie da sie potwierdzic w dwoch niezaleznych zrodlach - usun niepotwierdzone dane albo napisz inna, dobrze udokumentowana ciekawostke. Adres zrodla musi pochodzic z Twoich wynikow wyszukiwania - nie zgaduj adresow.
 
 Mozesz swobodnie opisac swoj tok rozumowania, wyniki wyszukiwania i wnioski - to nie ma znaczenia dla formatu odpowiedzi.
 
 WAZNE - FORMAT ODPOWIEDZI: niezaleznie od tego, co napiszesz jako analize, na sam koniec swojej odpowiedzi MUSISZ umiescic finalny, gotowy do publikacji tekst ciekawostki dokladnie w tym formacie, z dokladnie takimi znacznikami:
 
 <ciekawostka>
-(tutaj finalny tekst ciekawostki - jedno lub dwa zdania, bez cudzyslowow, bez wyjasnien)
+(tutaj finalny tekst ciekawostki - 3-4 zdania, zaczynajacy sie wielka litera, bez cudzyslowow, bez wyjasnien, bez linkow)
 </ciekawostka>
+<zrodlo>
+(pelny adres URL zweryfikowanego zrodla, zaczynajacy sie od https://)
+</zrodlo>
 
-Tylko zawartosc miedzy znacznikami <ciekawostka> i </ciekawostka> zostanie opublikowana - Twoja analiza poza znacznikami zostanie calkowicie zignorowana. Znaczniki i ich zawartosc sa OBOWIAZKOWE w kazdej odpowiedzi.
+Tylko zawartosc miedzy znacznikami zostanie opublikowana - Twoja analiza poza znacznikami zostanie calkowicie zignorowana. Oba znaczniki sa OBOWIAZKOWE w kazdej odpowiedzi.
 
 Jesli oryginalny tekst byl juz poprawny i wiarygodny - wstaw go w znacznikach bez zmian. Jesli mial bledy jezykowe - popraw je w wersji w znacznikach. Jesli laczyl dwa tematy - w znacznikach zostaw tylko pierwszy. Jesli fakt byl niepewny - w znacznikach umiesc ostrozniejsze sformulowanie lub inny, pewny fakt. Jesli zawieral superlatyw, ktorego nie udalo sie potwierdzic w zrodlach - w znacznikach umiesc wersje zlagodzona lub bez tego superlatywu.`;
 
@@ -226,13 +280,13 @@ Jesli oryginalny tekst byl juz poprawny i wiarygodny - wstaw go w znacznikach be
   // jednoznaczne znaczniki <ciekawostka> - nie ma ryzyka, ze skleimy
   // zapowiedz wyszukiwania z trescia, a znaczniki moga trafic do innego
   // bloku niz ostatni.
-  const { fullText } = await callClaude(prompt, true);
-  const match = fullText.match(/<ciekawostka>([\s\S]*?)<\/ciekawostka>/i);
-  if (!match) {
+  const { fullText, searchUrls } = await callClaude(prompt, true);
+  const parsed = parseTaggedFact(fullText);
+  if (!parsed) {
     console.warn('[ciekawostka] recenzent nie uzyl wymaganych znacznikow - odrzucam odpowiedz');
     return null;
   }
-  return match[1].trim().slice(0, 500);
+  return { ...parsed, searchUrls };
 }
 
 // Prosty, niezalezny od modelu filtr bezpieczenstwa: jesli odpowiedz modelu
@@ -242,7 +296,7 @@ Jesli oryginalny tekst byl juz poprawny i wiarygodny - wstaw go w znacznikach be
 // czysty tekst, niz przypadkowo pokazac uzytkownikom "tok myslenia" AI.
 function looksLikeMetaCommentary(text) {
   if (!text) return true;
-  if (text.length > 550) return true;
+  if (text.length > 950) return true;
   if (text.includes('**')) return true;
   const suspiciousPhrases = [
     'zanim', 'muszę sprawdzić', 'musze sprawdzic', 'po analizie', 'po dokładnej analizie',
@@ -290,68 +344,181 @@ function stripLeadingSuspiciousSentence(text) {
   return sentences.join(' ').trim();
 }
 
-// Pojedyncza proba wygenerowania ciekawostki (generowanie + recenzja +
-// wszystkie filtry). Zwraca gotowy tekst albo rzuca blad, jesli wynik nie
-// nadaje sie do publikacji.
+// ===================== WERYFIKACJA ZRODLA (w kodzie) =====================
+// Model moze zapewniac, ze sprawdzil zrodlo - ale tego nie zakladamy. Kazdy
+// link przechodzi przez cztery niezalezne sprawdzenia w naszym kodzie:
+//  1. czy to poprawny, konkretny adres (nie strona glowna, nie social media),
+//  2. czy wyszukiwarka FAKTYCZNIE zwrocila ten adres (a nie model go zmyslil),
+//  3. czy strona realnie istnieje i odpowiada (pobieramy ja),
+//  4. czy tresc strony zawiera kluczowe slowa i wszystkie lata z ciekawostki.
+const BLOCKED_SOURCE_HOSTS = [
+  'facebook.com', 'instagram.com', 'twitter.com', 'x.com', 'tiktok.com',
+  'pinterest.com', 'reddit.com', 'wykop.pl', 'threads.net', 'linkedin.com',
+];
+
+function normalizeUrl(u) {
+  try {
+    const url = new URL(u);
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    const path = url.pathname.replace(/\/+$/, '');
+    return `${host}${path}`;
+  } catch {
+    return null;
+  }
+}
+
+function checkSourceUrlShape(sourceUrl) {
+  if (!sourceUrl) throw new Error('brak zrodla');
+  let url;
+  try { url = new URL(sourceUrl); } catch { throw new Error(`niepoprawny adres zrodla: ${sourceUrl}`); }
+  if (!/^https?:$/.test(url.protocol)) throw new Error('zrodlo musi byc adresem http(s)');
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (BLOCKED_SOURCE_HOSTS.some((b) => host === b || host.endsWith(`.${b}`))) {
+    throw new Error(`zrodlo z serwisu spolecznosciowego nie jest akceptowane: ${host}`);
+  }
+  if (url.pathname.replace(/\/+$/, '') === '') {
+    throw new Error('zrodlo wskazuje strone glowna serwisu zamiast konkretnego artykulu');
+  }
+}
+
+function checkSourceWasFound(sourceUrl, knownUrls) {
+  const target = normalizeUrl(sourceUrl);
+  const known = new Set(knownUrls.map(normalizeUrl).filter(Boolean));
+  if (!known.has(target)) {
+    throw new Error(`zrodlo nie pochodzi z wynikow wyszukiwania (mozliwie zmyslone): ${sourceUrl}`);
+  }
+}
+
+async function checkSourceContent(sourceUrl, factText) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  let res;
+  try {
+    res = await fetch(sourceUrl, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; UtrudnieniaZG-weryfikacja/1.0; +https://utrudnienia-zg.pl)',
+        'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pl-PL,pl;q=0.9,en;q=0.8',
+      },
+    });
+  } catch (err) {
+    throw new Error(`zrodlo niedostepne (${err.name === 'AbortError' ? 'przekroczony czas' : err.message}): ${sourceUrl}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`zrodlo zwrocilo blad HTTP ${res.status}: ${sourceUrl}`);
+
+  const html = (await res.text()).slice(0, 2000000);
+  const page = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+
+  // Kluczowe slowa ciekawostki musza wystepowac na stronie.
+  const stems = [...significantWords(factText)];
+  const matched = stems.filter((st) => page.includes(st));
+  const required = Math.min(3, stems.length);
+  if (matched.length < required) {
+    throw new Error(`tresc zrodla nie pasuje do ciekawostki (wspolne slowa: ${matched.length}/${stems.length}): ${sourceUrl}`);
+  }
+
+  // Kazdy rok podany w ciekawostce musi wystepowac na stronie - to lapie
+  // najczestszy rodzaj zmyslonego szczegolu (bledna data).
+  const years = [...new Set(factText.match(/\b(1[0-9]{3}|20[0-9]{2})\b/g) || [])];
+  const missingYears = years.filter((y) => !page.includes(y));
+  if (missingYears.length) {
+    throw new Error(`zrodlo nie potwierdza dat z ciekawostki (brak: ${missingYears.join(', ')}): ${sourceUrl}`);
+  }
+}
+
+// ===================== ZGODNOSC CZASU Z DZISIEJSZA DATA =====================
+// Lapie bledy typu "final odbedzie sie 18 lipca", gdy dzis jest wrzesien.
+const MONTH_INDEX = {
+  stycznia: 0, lutego: 1, marca: 2, kwietnia: 3, maja: 4, czerwca: 5, lipca: 6,
+  sierpnia: 7, 'września': 8, wrzesnia: 8, 'października': 9, pazdziernika: 9,
+  listopada: 10, grudnia: 11,
+};
+const FUTURE_VERBS = /(odbędzie|odbedzie|odbędą|odbeda|rozpocznie|rozpoczną|rozpoczna|zostanie otwart|zostaną otwart|potrwa|wystąpi|wystapi|zagra|zagrają|zagraja|będzie można|bedzie mozna|zaplanowan|nadchodząc|nadchodzac)/i;
+
+function checkTemporalConsistency(text) {
+  if (!FUTURE_VERBS.test(text)) return;
+  const warsawNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Warsaw' }));
+  const today = new Date(warsawNow.getFullYear(), warsawNow.getMonth(), warsawNow.getDate());
+  const re = /(\d{1,2})\s+(stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|wrzesnia|października|pazdziernika|listopada|grudnia)(?:\s+(\d{4}))?/giu;
+  const datesThisYear = [];
+  let m;
+  while ((m = re.exec(text))) {
+    const year = m[3] ? Number(m[3]) : today.getFullYear();
+    if (year !== today.getFullYear()) continue; // daty historyczne pomijamy
+    datesThisYear.push(new Date(year, MONTH_INDEX[m[2].toLowerCase()], Number(m[1])));
+  }
+  if (!datesThisYear.length) return;
+  const anyUpcoming = datesThisYear.some((d) => d >= today);
+  if (!anyUpcoming) {
+    throw new Error('tekst zapowiada w czasie przyszlym wydarzenie, ktore juz sie odbylo');
+  }
+}
+
+// Pojedyncza proba wygenerowania ciekawostki (generowanie + obowiazkowa
+// recenzja + wszystkie kontrole w kodzie). Zwraca { content, sourceUrl }
+// albo rzuca blad, jesli wynik nie nadaje sie do publikacji.
 async function attemptGenerateFact(avoidList) {
   const draft = await generateFact(avoidList);
-  let result;
-  try {
-    const reviewed = await reviewFact(draft);
-    // reviewed === null: recenzent nie uzyl wymaganych znacznikow <ciekawostka>
-    // - odrzucamy cala odpowiedz i uzywamy czystego szkicu z kroku 1.
-    if (!reviewed) {
-      result = draft;
-    } else if (looksLikeMetaCommentary(reviewed)) {
-      // Dodatkowa siatka bezpieczenstwa: nawet wewnatrz znacznikow model
-      // teoretycznie mogl wpisac fragment swojej analizy - sprawdzamy to
-      // heurystycznie jako druga linia obrony.
-      console.warn('[ciekawostka] tresc w znacznikach wygladala podejrzanie - uzywam czystego szkicu z kroku 1');
-      result = draft;
-    } else {
-      result = reviewed;
-    }
-  } catch (err) {
-    // Jesli krok weryfikacji z jakiegos powodu zawiedzie (np. chwilowy
-    // blad API), lepiej opublikowac niezweryfikowany, ale sensowny
-    // szkic niz nic nie pokazac uzytkownikom.
-    console.warn('[ciekawostka] blad weryfikacji, uzywam wersji roboczej:', err.message);
-    result = draft;
-  }
 
-  // Trzecia, programistyczna linia obrony - niezaleznie od tego, KTORA
-  // sciezka powyzej dala wynik, na koniec zawsze probujemy obciac
-  // ewentualne zdanie-narracje na poczatku, zanim tekst trafi do bazy.
-  const stripped = stripLeadingSuspiciousSentence(result);
-  if (stripped !== result) {
+  // Recenzja jest OBOWIAZKOWA - to ona niezaleznie sprawdza fakt i zrodlo.
+  // Jesli sie nie powiedzie, nie publikujemy niesprawdzonego szkicu -
+  // cala proba jest odrzucana i nastepuje kolejna.
+  const reviewed = await reviewFact(draft);
+  if (!reviewed) throw new Error('recenzja nie zwrocila wyniku w wymaganym formacie');
+
+  let content = reviewed.text;
+  const sourceUrl = reviewed.sourceUrl || draft.sourceUrl;
+
+  // Linia obrony przed wyciekiem procesu modelu do tresci.
+  const stripped = stripLeadingSuspiciousSentence(content);
+  if (stripped !== content) {
     console.warn('[ciekawostka] obcieto podejrzane zdanie na poczatku tekstu przed publikacja');
   }
+  content = stripped;
 
-  if (looksLikeMetaCommentary(stripped)) {
+  if (looksLikeMetaCommentary(content)) {
     throw new Error('tekst wyglada na wyciek procesu modelu');
   }
-
-  // Programistyczna kontrola KONKRETNOSCI - odrzucamy ogolniki, ktore nic
-  // nie mowia czytelnikowi (retry dostanie szanse na lepszy tekst).
-  if (looksTooVague(stripped)) {
+  // Mala litera na poczatku = najpewniej urwany poczatek zdania.
+  if (/^[a-ząćęłńóśźż]/.test(content)) {
+    throw new Error('tekst zaczyna sie mala litera - prawdopodobnie urwany');
+  }
+  if (looksTooVague(content)) {
     throw new Error('tekst jest zbyt ogolnikowy - brak konkretow albo puste zwroty');
   }
+  if (content.length < 150) {
+    throw new Error(`tekst za krotki (${content.length} znakow) - brak kontekstu`);
+  }
+  checkTemporalConsistency(content);
 
-  // Programistyczna kontrola powtorzen - niezalezna od tego, czy model
-  // zastosowal sie do listy "nie powtarzaj" w promptcie.
-  const duplicateOf = isTooSimilarToRecent(stripped, avoidList);
+  const duplicateOf = isTooSimilarToRecent(content, avoidList);
   if (duplicateOf) {
     throw new Error(`temat powtarza sie z wczesniejsza ciekawostka: "${duplicateOf.slice(0, 80)}..."`);
   }
 
-  return stripped;
+  // Weryfikacja zrodla - na koncu, bo wymaga pobrania strony.
+  checkSourceUrlShape(sourceUrl);
+  checkSourceWasFound(sourceUrl, [...(draft.searchUrls || []), ...(reviewed.searchUrls || [])]);
+  await checkSourceContent(sourceUrl, content);
+
+  return { content, sourceUrl };
 }
 
 // Glowna funkcja - probuje kilka razy, zanim sie podda. Dzieki temu
 // pojedyncza nieudana proba (wyciek procesu modelu albo powtorzony temat)
 // nie oznacza od razu braku ciekawostki na dany dzien - kolejne podejscie
 // zwykle konczy sie sukcesem.
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 4;
 async function generateFactViaClaude(avoidList) {
   let lastError = null;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -372,12 +539,12 @@ async function generateFactViaClaude(avoidList) {
 async function getTodayFact() {
   const date = todayDate();
   const cached = getDailyFact(date);
-  if (cached) return { date, content: cached.content, generated: false };
+  if (cached) return { date, content: cached.content, source_url: cached.source_url || null, generated: false };
 
   const recentFacts = getRecentFacts(60);
-  const content = await generateFactViaClaude(recentFacts);
-  saveDailyFact(date, content);
-  return { date, content, generated: true };
+  const { content, sourceUrl } = await generateFactViaClaude(recentFacts);
+  saveDailyFact(date, content, sourceUrl);
+  return { date, content, source_url: sourceUrl, generated: true };
 }
 
 // Usuwa dzisiejsza, juz zapisana ciekawostke i generuje nowa od zera -
@@ -388,9 +555,9 @@ async function forceRegenerateTodayFact() {
   const date = todayDate();
   deleteDailyFact(date);
   const recentFacts = getRecentFacts(60);
-  const content = await generateFactViaClaude(recentFacts);
-  saveDailyFact(date, content);
-  return { date, content, generated: true };
+  const { content, sourceUrl } = await generateFactViaClaude(recentFacts);
+  saveDailyFact(date, content, sourceUrl);
+  return { date, content, source_url: sourceUrl, generated: true };
 }
 
 module.exports = { getTodayFact, forceRegenerateTodayFact };
