@@ -11,7 +11,42 @@ function todayDate() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// ===================== TWARDY LIMIT WYWOLAN API =====================
+// Kazde wywolanie modelu kosztuje, wiec pilnujemy tego w kodzie, a nie
+// "mniej wiecej". Normalny dzien = 2 wywolania (generowanie + recenzja).
+// Jesli cos pojdzie nie tak, zostaje budzet na JEDNO dodatkowe podejscie.
+// Po wyczerpaniu limitu appka tego dnia nie wykona juz zadnego wywolania -
+// pokazuje ostatnia dostepna ciekawostke. Reczna regeneracja przez panel
+// admina swiadomie resetuje limit.
+const MAX_API_CALLS_PER_DAY = 3;
+let apiBudgetDate = null;
+let apiCallsUsedToday = 0;
+
+function apiCallsLeftToday() {
+  if (apiBudgetDate !== todayDate()) return MAX_API_CALLS_PER_DAY;
+  return Math.max(0, MAX_API_CALLS_PER_DAY - apiCallsUsedToday);
+}
+
+function registerApiCall() {
+  const today = todayDate();
+  if (apiBudgetDate !== today) {
+    apiBudgetDate = today;
+    apiCallsUsedToday = 0;
+  }
+  apiCallsUsedToday++;
+  console.log(`[ciekawostka] wywolanie API ${apiCallsUsedToday}/${MAX_API_CALLS_PER_DAY} (dzien ${today})`);
+}
+
+function resetApiBudget() {
+  apiBudgetDate = todayDate();
+  apiCallsUsedToday = 0;
+}
+
 async function callClaude(prompt, useSearch) {
+  if (apiCallsLeftToday() <= 0) {
+    throw new Error(`wyczerpany dzienny limit ${MAX_API_CALLS_PER_DAY} wywolan API`);
+  }
+  registerApiCall();
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('Brak ANTHROPIC_API_KEY w zmiennych srodowiskowych');
 
@@ -464,27 +499,15 @@ function checkTemporalConsistency(text) {
   }
 }
 
-// Pojedyncza proba wygenerowania ciekawostki (generowanie + obowiazkowa
-// recenzja + wszystkie kontrole w kodzie). Zwraca { content, sourceUrl }
-// albo rzuca blad, jesli wynik nie nadaje sie do publikacji.
-async function attemptGenerateFact(avoidList) {
-  const draft = await generateFact(avoidList);
-
-  // Recenzja jest OBOWIAZKOWA - to ona niezaleznie sprawdza fakt i zrodlo.
-  // Jesli sie nie powiedzie, nie publikujemy niesprawdzonego szkicu -
-  // cala proba jest odrzucana i nastepuje kolejna.
-  const reviewed = await reviewFact(draft);
-  if (!reviewed) throw new Error('recenzja nie zwrocila wyniku w wymaganym formacie');
-
-  let content = reviewed.text;
-  const sourceUrl = reviewed.sourceUrl || draft.sourceUrl;
-
-  // Linia obrony przed wyciekiem procesu modelu do tresci.
-  const stripped = stripLeadingSuspiciousSentence(content);
-  if (stripped !== content) {
+// Wszystkie kontrole wykonywane w naszym kodzie (bez zadnego wywolania API,
+// wiec sa darmowe). Rzucaja blad z powodem, jesli tekst nie nadaje sie do
+// publikacji. Uzywane zarowno po normalnej sciezce, jak i po podejsciu
+// naprawczym - dzieki temu obie daja identyczna gwarancje jakosci.
+async function runAllChecks({ text, sourceUrl, searchUrls }, avoidList) {
+  let content = stripLeadingSuspiciousSentence(text);
+  if (content !== text) {
     console.warn('[ciekawostka] obcieto podejrzane zdanie na poczatku tekstu przed publikacja');
   }
-  content = stripped;
 
   if (looksLikeMetaCommentary(content)) {
     throw new Error('tekst wyglada na wyciek procesu modelu');
@@ -508,32 +531,87 @@ async function attemptGenerateFact(avoidList) {
 
   // Weryfikacja zrodla - na koncu, bo wymaga pobrania strony.
   checkSourceUrlShape(sourceUrl);
-  checkSourceWasFound(sourceUrl, [...(draft.searchUrls || []), ...(reviewed.searchUrls || [])]);
+  checkSourceWasFound(sourceUrl, searchUrls);
   await checkSourceContent(sourceUrl, content);
 
   return { content, sourceUrl };
 }
 
-// Glowna funkcja - probuje kilka razy, zanim sie podda. Dzieki temu
-// pojedyncza nieudana proba (wyciek procesu modelu albo powtorzony temat)
-// nie oznacza od razu braku ciekawostki na dany dzien - kolejne podejscie
-// zwykle konczy sie sukcesem.
-const MAX_ATTEMPTS = 4;
+// SCIEZKA NORMALNA - 2 wywolania API: generowanie + niezalezna recenzja.
+async function attemptGenerateFact(avoidList) {
+  const draft = await generateFact(avoidList);
+
+  // Recenzja jest OBOWIAZKOWA - to ona niezaleznie sprawdza fakt i zrodlo.
+  const reviewed = await reviewFact(draft);
+  if (!reviewed) throw new Error('recenzja nie zwrocila wyniku w wymaganym formacie');
+
+  return runAllChecks({
+    text: reviewed.text,
+    sourceUrl: reviewed.sourceUrl || draft.sourceUrl,
+    searchUrls: [...(draft.searchUrls || []), ...(reviewed.searchUrls || [])],
+  }, avoidList);
+}
+
+// SCIEZKA NAPRAWCZA - JEDNO wywolanie API, uruchamiane tylko wtedy, gdy
+// sciezka normalna zawiodla i zostal budzet. Model dostaje informacje, co
+// konkretnie poszlo nie tak, i od razu ma sam zweryfikowac swoj tekst
+// (generowanie i sprawdzanie w jednym kroku). Wszystkie kontrole w kodzie -
+// w tym weryfikacja zrodla - obowiazuja tak samo jak w sciezce normalnej,
+// wiec oszczednosc dotyczy liczby wywolan, a nie jakosci.
+async function attemptRepairFact(avoidList, previousError) {
+  const today = new Date().toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Warsaw' });
+  const avoidText = avoidList.length
+    ? `ZAKAZ POWTORZEN - te tematy byly juz wykorzystane, wybierz CALKOWICIE INNY:\n${avoidList.slice(0, 30).map((f) => `- ${f}`).join('\n')}\n\n`
+    : '';
+
+  const prompt = `Dzisiaj jest ${today}. Poprzednia proba napisania ciekawostki o Zielonej Gorze (woj. lubuskie) zostala ODRZUCONA z powodu: "${previousError}".
+
+To Twoja OSTATNIA proba - napisz od nowa ciekawostke, ktora na pewno przejdzie kontrole. Wyszukaj w internecie i SAM zweryfikuj wynik, zanim odpowiesz.
+
+WYMAGANIA (kazde jest sprawdzane automatycznie):
+- 3-4 zdania, 300-500 znakow: glowny fakt + kontekst (tlo, szczegoly, liczby). Zaczynaj wielka litera, od razu od faktu.
+- KONKRETY: nazwa wlasna, liczba, data, miejsce lub nazwisko. Zadnych ogolnikow ani zwrotow typu "przyciaga uwage", "cieszy sie zainteresowaniem".
+- CZAS: wydarzenia, ktore juz sie odbyly, opisuj w czasie PRZESZLYM. Nie pisz "odbedzie sie" o czyms, co minelo przed ${today}.
+- SUPERLATYWY ("pierwszy", "jedyny", "najstarszy") tylko jesli zrodlo potwierdza je wprost, inaczej zlagodz.
+- ZRODLO: pelny adres URL konkretnej podstrony (nie strony glownej) z Twoich wynikow wyszukiwania. Nie zgaduj adresu. Zabronione: media spolecznosciowe, fora, anonimowe blogi. Strona MUSI zawierac kluczowe slowa i WSZYSTKIE lata podane w ciekawostce - inaczej tekst zostanie odrzucony.
+- NIE opisuj tego, co robisz ("Wyszukuje...", "Sprawdzam...") - tresc ma zawierac sam fakt.
+
+${avoidText}FORMAT ODPOWIEDZI - na koniec umiesc dokladnie:
+<ciekawostka>
+(tresc, 3-4 zdania)
+</ciekawostka>
+<zrodlo>
+(pelny adres URL, zaczynajacy sie od https://)
+</zrodlo>`;
+
+  const { fullText, searchUrls } = await callClaude(prompt, true);
+  const parsed = parseTaggedFact(fullText);
+  if (!parsed) throw new Error('podejscie naprawcze nie zwrocilo wymaganych znacznikow');
+
+  return runAllChecks({ ...parsed, searchUrls }, avoidList);
+}
+
+// Glowna funkcja. Budzet: normalnie 2 wywolania API, a gdy cos zawiedzie -
+// jeszcze jedno, naprawcze. Wiecej nie bedzie, nawet jesli tez sie nie uda:
+// wtedy appka po prostu pokazuje ostatnia dostepna ciekawostke.
 async function generateFactViaClaude(avoidList) {
-  let lastError = null;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  try {
+    return await attemptGenerateFact(avoidList);
+  } catch (err) {
+    console.warn(`[ciekawostka] sciezka normalna nieudana: ${err.message}`);
+
+    if (apiCallsLeftToday() < 1) {
+      throw new Error(`Nie udalo sie wygenerowac ciekawostki, brak budzetu na kolejne wywolanie. Powod: ${err.message}`);
+    }
+
     try {
-      const fact = await attemptGenerateFact(avoidList);
-      if (attempt > 1) {
-        console.log(`[ciekawostka] sukces w probie ${attempt}/${MAX_ATTEMPTS}`);
-      }
+      const fact = await attemptRepairFact(avoidList, err.message);
+      console.log('[ciekawostka] sukces w podejsciu naprawczym (3. wywolanie)');
       return fact;
-    } catch (err) {
-      lastError = err;
-      console.warn(`[ciekawostka] proba ${attempt}/${MAX_ATTEMPTS} nieudana: ${err.message}`);
+    } catch (err2) {
+      throw new Error(`Nie udalo sie wygenerowac ciekawostki po ${MAX_API_CALLS_PER_DAY} wywolaniach. Ostatni powod: ${err2.message}`);
     }
   }
-  throw new Error(`Nie udalo sie wygenerowac poprawnej ciekawostki po ${MAX_ATTEMPTS} probach. Ostatni powod: ${lastError ? lastError.message : 'nieznany'}`);
 }
 
 // ============ GENEROWANIE W TLE, BEZ KAZANIA UZYTKOWNIKOWI CZEKAC ============
@@ -609,6 +687,7 @@ async function getTodayFact({ wait = false } = {}) {
 async function forceRegenerateTodayFact() {
   const date = todayDate();
   lastFailureAt = 0; // reczna regeneracja zawsze probuje od nowa
+  resetApiBudget();  // swiadoma decyzja admina - dajemy swiezy limit wywolan
   deleteDailyFact(date);
   const recentFacts = getRecentFacts(60);
   const { content, sourceUrl } = await generateFactViaClaude(recentFacts);
