@@ -238,6 +238,13 @@ function getRecentFacts(limit = 20) {
     .map((r) => r.content);
 }
 
+// Najnowsza zapisana ciekawostka (niezaleznie od daty). Sluzy do tego, by
+// przy braku dzisiejszej tresci pokazac uzytkownikowi od reki wczorajsza,
+// zamiast kazac mu czekac na wygenerowanie nowej.
+function getLatestFact() {
+  return db.prepare('SELECT * FROM daily_fact ORDER BY fact_date DESC LIMIT 1').get();
+}
+
 function saveSubscription(endpoint, subscriptionJson, categories) {
   db.prepare(`
     INSERT INTO push_subscriptions (endpoint, subscription_json, categories)
@@ -347,6 +354,7 @@ module.exports = {
   deleteDailyFact,
   saveDailyFact,
   getRecentFacts,
+  getLatestFact,
   saveSubscription,
   deleteSubscription,
   getAllSubscriptions,

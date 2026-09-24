@@ -208,7 +208,7 @@ app.post('/api/admin/ads-check', async (req, res) => {
 // zapytanie do Claude z wyszukiwaniem w internecie na zywo.
 cron.schedule('30 5 * * *', () => {
   console.log('[cron] przygotowuje dzisiejsza ciekawostke z wyprzedzeniem...');
-  getTodayFact().catch((err) => console.error('[cron] blad przygotowania ciekawostki:', err.message));
+  getTodayFact({ wait: true }).catch((err) => console.error('[cron] blad przygotowania ciekawostki:', err.message));
 }, { timezone: 'Europe/Warsaw' });
 
 app.listen(PORT, () => {
@@ -234,4 +234,4 @@ cron.schedule('0 8 * * *', () => {
 }, { timezone: 'Europe/Warsaw' });
 
 scrapeAll().catch((err) => console.error('[start] blad pierwszego scrapowania:', err));
-getTodayFact().catch((err) => console.error('[start] blad przygotowania ciekawostki:', err.message));
+getTodayFact({ wait: true }).catch((err) => console.error('[start] blad przygotowania ciekawostki:', err.message));

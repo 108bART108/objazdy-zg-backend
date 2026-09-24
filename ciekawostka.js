@@ -1,4 +1,4 @@
-const { getDailyFact, deleteDailyFact, saveDailyFact, getRecentFacts } = require('./db');
+const { getDailyFact, deleteDailyFact, saveDailyFact, getRecentFacts, getLatestFact } = require('./db');
 
 const MODEL = 'claude-haiku-4-5-20251001';
 
@@ -536,15 +536,70 @@ async function generateFactViaClaude(avoidList) {
   throw new Error(`Nie udalo sie wygenerowac poprawnej ciekawostki po ${MAX_ATTEMPTS} probach. Ostatni powod: ${lastError ? lastError.message : 'nieznany'}`);
 }
 
-async function getTodayFact() {
+// ============ GENEROWANIE W TLE, BEZ KAZANIA UZYTKOWNIKOWI CZEKAC ============
+// Pelna weryfikacja (2 zapytania z wyszukiwaniem + pobranie strony zrodlowej,
+// do 4 prob) trwa nawet ponad minute - o wiele dluzej niz appka czeka na
+// odpowiedz. Dlatego:
+//  - generowanie uruchamiamy najwyzej RAZ naraz (inFlight), zeby 10 osob
+//    wchodzacych rano nie uruchomilo 10 rownoleglych, platnych generowan,
+//  - uzytkownik nigdy na nie nie czeka: dostaje od reki ostatnia dostepna
+//    ciekawostke, a nowa podmienia sie przy kolejnym wejsciu,
+//  - po nieudanej probie robimy przerwe, zeby nie ponawiac jej przy kazdym
+//    wejsciu do appki.
+let inFlightGeneration = null;
+let lastFailureAt = 0;
+const FAILURE_COOLDOWN_MS = 15 * 60 * 1000;
+
+function startGenerationInBackground() {
+  if (inFlightGeneration) return inFlightGeneration;
+
+  const date = todayDate();
+  inFlightGeneration = (async () => {
+    const started = Date.now();
+    const recentFacts = getRecentFacts(60);
+    const { content, sourceUrl } = await generateFactViaClaude(recentFacts);
+    saveDailyFact(date, content, sourceUrl);
+    console.log(`[ciekawostka] wygenerowano ciekawostke na ${date} w ${Math.round((Date.now() - started) / 1000)}s`);
+    return { date, content, source_url: sourceUrl, generated: true };
+  })();
+
+  inFlightGeneration
+    .catch((err) => {
+      lastFailureAt = Date.now();
+      console.error('[ciekawostka] generowanie nieudane:', err.message);
+    })
+    .finally(() => { inFlightGeneration = null; });
+
+  return inFlightGeneration;
+}
+
+// wait=true (cron, start serwera, reczna regeneracja): czekamy na wynik.
+// wait=false (zwykle wejscie uzytkownika do appki): nie czekamy.
+async function getTodayFact({ wait = false } = {}) {
   const date = todayDate();
   const cached = getDailyFact(date);
   if (cached) return { date, content: cached.content, source_url: cached.source_url || null, generated: false };
 
-  const recentFacts = getRecentFacts(60);
-  const { content, sourceUrl } = await generateFactViaClaude(recentFacts);
-  saveDailyFact(date, content, sourceUrl);
-  return { date, content, source_url: sourceUrl, generated: true };
+  const inCooldown = !wait && Date.now() - lastFailureAt < FAILURE_COOLDOWN_MS;
+  if (!inCooldown) {
+    const generation = startGenerationInBackground();
+    if (wait) return generation;
+  }
+
+  // Nie kazemy uzytkownikowi czekac - pokazujemy ostatnia dostepna tresc.
+  const previous = getLatestFact();
+  if (previous) {
+    return {
+      date: previous.fact_date,
+      content: previous.content,
+      source_url: previous.source_url || null,
+      generated: false,
+    };
+  }
+
+  // Baza jest pusta (pierwsze uruchomienie) - nie ma czego pokazac,
+  // wiec jednak czekamy na wynik.
+  return startGenerationInBackground();
 }
 
 // Usuwa dzisiejsza, juz zapisana ciekawostke i generuje nowa od zera -
@@ -553,6 +608,7 @@ async function getTodayFact() {
 // czekania do jutra.
 async function forceRegenerateTodayFact() {
   const date = todayDate();
+  lastFailureAt = 0; // reczna regeneracja zawsze probuje od nowa
   deleteDailyFact(date);
   const recentFacts = getRecentFacts(60);
   const { content, sourceUrl } = await generateFactViaClaude(recentFacts);
