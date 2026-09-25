@@ -1,4 +1,5 @@
 const cheerio = require('cheerio');
+const https = require('https');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
 const { extractPolishDate } = require('./polishDates');
@@ -29,11 +30,93 @@ const HEADERS = {
 // - trzeba je jawnie pomijac, zamiast brac "pierwszy dluzszy <p>".
 const BOILERPLATE_RE = /sp[oó]łka z ograniczon[aą] odpowiedzialno|\bnip:?\s*\d|\bregon:?\s*\d|pliki?\s+cookies?|ustawie(ń|niami)?\s+(dotycz\S*\s+)?cookies|ustawieniami\s+przegl\p{L}darki|korzystaj\p{L}c\s+z\s+(naszego\s+)?serwisu\s+bez\s+zmiany/iu;
 
-async function fetchArticleDescription(url) {
+// ===================== POBIERANIE STRONY Z OBEJSCIAMI =====================
+// Serwer Render nie potrafil polaczyc sie z mzk.zgora.pl - fetch konczyl sie
+// bledem "fetch failed" po ~10 sekundach, czyli po limicie czasu na
+// polaczenie. Nie byla to blokada bota (nie dostalismy zadnej odpowiedzi),
+// tylko problem z samym polaczeniem. Dlatego probujemy po kolei:
+//   1. zwykly fetch (IPv6 albo IPv4, zaleznie od systemu),
+//   2. wymuszone IPv4 - czesta przyczyna takich bledow to niedzialajacy
+//      adres IPv6 strony, na ktory Node trafia jako pierwszy,
+//   3. opcjonalny serwer posredniczacy, jesli ustawisz zmienna
+//      srodowiskowa MZK_PROXY_URL (np. "https://api.allorigins.win/raw?url=").
+//      Przydatne, gdyby strona blokowala adresy IP serwerowni.
+// Kazda nieudana proba trafia do logow z konkretna przyczyna, zamiast
+// ogolnego "fetch failed".
+
+function opisBledu(err) {
+  const cause = err && err.cause;
+  if (cause && (cause.code || cause.message)) {
+    return `${err.message} (${cause.code || ''} ${cause.message || ''})`.trim();
+  }
+  return err ? err.message : 'nieznany blad';
+}
+
+// Pobranie przez modul https z wymuszona wersja protokolu IP.
+function fetchPrzezHttps(url, family, timeoutMs = 15000, redirectsLeft = 2) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: HEADERS, family, timeout: timeoutMs }, (res) => {
+      const { statusCode, headers } = res;
+      if (statusCode >= 300 && statusCode < 400 && headers.location && redirectsLeft > 0) {
+        res.resume();
+        const next = new URL(headers.location, url).href;
+        fetchPrzezHttps(next, family, timeoutMs, redirectsLeft - 1).then(resolve, reject);
+        return;
+      }
+      if (statusCode >= 400) {
+        res.resume();
+        reject(new Error(`HTTP ${statusCode}`));
+        return;
+      }
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: statusCode, html: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('timeout', () => req.destroy(new Error(`przekroczony czas ${timeoutMs}ms`)));
+    req.on('error', reject);
+  });
+}
+
+async function pobierzStrone(url) {
+  const bledy = [];
+
+  // 1. Zwykly fetch
   try {
     const res = await fetch(url, { headers: HEADERS });
-    if (!res.ok) return null;
-    const html = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return { status: res.status, html: await res.text() };
+  } catch (err) {
+    bledy.push(`fetch: ${opisBledu(err)}`);
+  }
+
+  // 2. Wymuszone IPv4
+  try {
+    const res = await fetchPrzezHttps(url, 4);
+    console.log(`[mzk] ${url}: zwykly fetch zawiodl, ale IPv4 zadzialalo`);
+    return res;
+  } catch (err) {
+    bledy.push(`IPv4: ${opisBledu(err)}`);
+  }
+
+  // 3. Opcjonalny serwer posredniczacy
+  const proxy = process.env.MZK_PROXY_URL;
+  if (proxy) {
+    try {
+      const res = await fetch(proxy + encodeURIComponent(url), { headers: HEADERS });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      console.log(`[mzk] ${url}: pobrano przez serwer posredniczacy`);
+      return { status: res.status, html: await res.text() };
+    } catch (err) {
+      bledy.push(`proxy: ${opisBledu(err)}`);
+    }
+  }
+
+  throw new Error(`nie udalo sie pobrac ${url} - ${bledy.join(' | ')}`);
+}
+
+async function fetchArticleDescription(url) {
+  try {
+    const { html } = await pobierzStrone(url);
     const $ = cheerio.load(html);
 
     // Wstaw spacje w miejscu <br>, zeby sklejone linie nie zlepily sie
@@ -95,9 +178,7 @@ async function fetchArticleDescription(url) {
 // pusta, jesli strona odpowiedziala, ale nic nie pasowalo (wtedy warto
 // sprobowac innego adresu).
 async function fetchListing(pageUrl) {
-  const res = await fetch(pageUrl, { headers: HEADERS });
-  if (!res.ok) throw new Error(`HTTP ${res.status} dla ${pageUrl}`);
-  const html = await res.text();
+  const { status, html } = await pobierzStrone(pageUrl);
   const $ = cheerio.load(html);
   const base = new URL(pageUrl).origin;
   const seen = new Set();
@@ -141,7 +222,7 @@ async function fetchListing(pageUrl) {
   // zabezpieczenia - zamiast zgadywac przyczyne.
   if (!articles.length) {
     const preview = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
-    console.warn(`[mzk] ${pageUrl}: 0 artykulow (HTTP ${res.status}, ${html.length} znakow). Poczatek tresci: "${preview}"`);
+    console.warn(`[mzk] ${pageUrl}: 0 artykulow (HTTP ${status}, ${html.length} znakow). Poczatek tresci: "${preview}"`);
   }
   return articles;
 }
@@ -151,8 +232,13 @@ async function fetchMzk() {
   try {
     let articles = [];
     for (const pageUrl of PAGE_URLS) {
-      articles = await fetchListing(pageUrl);
-      if (articles.length) break; // udalo sie - nie probujemy kolejnego adresu
+      try {
+        articles = await fetchListing(pageUrl);
+        if (articles.length) break; // udalo sie - nie probujemy kolejnego adresu
+      } catch (err) {
+        // Blad jednego adresu nie moze przerwac proby kolejnego.
+        console.warn(`[mzk] ${err.message}`);
+      }
     }
     if (!articles.length) {
       console.error('[mzk] zaden z adresow nie zwrocil artykulow - sprawdz logi powyzej');
