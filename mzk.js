@@ -286,7 +286,11 @@ async function fetchMzk() {
 
   // Przerwa po wykryciu blokady polaczenia - zeby nie marnowac ~50 sekund
   // kazdego cyklu na czekanie na wygasniecie limitow czasu.
-  if (Date.now() < przerwaDo) {
+  // WAZNE: przerwa dotyczy TYLKO polaczenia bezposredniego. Jesli jest
+  // ustawiony serwer posredniczacy (MZK_PROXY_URL), pobieramy przez niego
+  // normalnie w kazdym cyklu - on laczy sie inna droga, wiec blokada
+  // naszego adresu IP go nie dotyczy.
+  if (!process.env.MZK_PROXY_URL && Date.now() < przerwaDo) {
     const zaIle = Math.ceil((przerwaDo - Date.now()) / 60000);
     console.warn(`[mzk] pomijam probe - polaczenie bylo blokowane, kolejna proba za ok. ${zaIle} min`);
     return results;
