@@ -44,6 +44,20 @@ const BOILERPLATE_RE = /sp[oó]łka z ograniczon[aą] odpowiedzialno|\bnip:?\s*\
 // Kazda nieudana proba trafia do logow z konkretna przyczyna, zamiast
 // ogolnego "fetch failed".
 
+// Gdy strona blokuje nasz adres IP, kazda proba konczy sie dopiero po
+// wygasnieciu limitu czasu - a to oznacza, ze KAZDY cykl scrapowania
+// (co 30 minut) marnuje kilkadziesiat sekund na czekanie. Dlatego po
+// wykryciu problemu z samym polaczeniem robimy godzinna przerwe:
+// scraper nie probuje w kolko, ale co godzine sprawdza, czy blokada
+// zostala zdjeta.
+const PRZERWA_PO_BLOKADZIE_MS = 60 * 60 * 1000;
+let przerwaDo = 0;
+let wolProxy = false; // po nieudanym polaczeniu bezposrednim zaczynamy od proxy
+
+function toBladPolaczenia(komunikat) {
+  return /CONNECT_TIMEOUT|przekroczony czas|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(komunikat);
+}
+
 function opisBledu(err) {
   const cause = err && err.cause;
   if (cause && (cause.code || cause.message)) {
@@ -77,10 +91,16 @@ function fetchPrzezHttps(url, family, timeoutMs = 15000, redirectsLeft = 2) {
   });
 }
 
-async function pobierzStrone(url) {
-  const bledy = [];
+async function przezProxy(url) {
+  const proxy = process.env.MZK_PROXY_URL;
+  if (!proxy) throw new Error('MZK_PROXY_URL nie jest ustawione');
+  const res = await fetch(proxy + encodeURIComponent(url), { headers: HEADERS });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return { status: res.status, html: await res.text() };
+}
 
-  // 1. Zwykly fetch
+async function bezposrednio(url) {
+  const bledy = [];
   try {
     const res = await fetch(url, { headers: HEADERS });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -88,28 +108,62 @@ async function pobierzStrone(url) {
   } catch (err) {
     bledy.push(`fetch: ${opisBledu(err)}`);
   }
-
-  // 2. Wymuszone IPv4
   try {
-    const res = await fetchPrzezHttps(url, 4);
+    const res = await fetchPrzezHttps(url, 4, 8000);
     console.log(`[mzk] ${url}: zwykly fetch zawiodl, ale IPv4 zadzialalo`);
     return res;
   } catch (err) {
     bledy.push(`IPv4: ${opisBledu(err)}`);
   }
+  throw new Error(bledy.join(' | '));
+}
 
-  // 3. Opcjonalny serwer posredniczacy
-  const proxy = process.env.MZK_PROXY_URL;
-  if (proxy) {
+async function pobierzStrone(url) {
+  const bledy = [];
+  const mamyProxy = !!process.env.MZK_PROXY_URL;
+  let probowanoProxy = false;
+
+  // Jesli poprzednio polaczenie bezposrednie bylo blokowane, a mamy
+  // skonfigurowany serwer posredniczacy - zaczynamy od niego, zeby nie
+  // czekac za kazdym razem na wygasniecie limitow czasu.
+  if (mamyProxy && wolProxy) {
+    probowanoProxy = true;
     try {
-      const res = await fetch(proxy + encodeURIComponent(url), { headers: HEADERS });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await przezProxy(url);
       console.log(`[mzk] ${url}: pobrano przez serwer posredniczacy`);
-      return { status: res.status, html: await res.text() };
+      return res;
     } catch (err) {
       bledy.push(`proxy: ${opisBledu(err)}`);
     }
   }
+
+  let blokadaPolaczenia = false;
+  try {
+    const res = await bezposrednio(url);
+    wolProxy = false;
+    przerwaDo = 0; // polaczenie znow dziala - koniec przerwy
+    return res;
+  } catch (err) {
+    bledy.push(err.message);
+    blokadaPolaczenia = toBladPolaczenia(err.message);
+    if (blokadaPolaczenia) wolProxy = true;
+  }
+
+  // Proxy jako ostatnia deska ratunku - takze wtedy, gdy polaczenie
+  // bezposrednie jest blokowane (to wlasnie po to je ustawiamy).
+  if (mamyProxy && !probowanoProxy) {
+    try {
+      const res = await przezProxy(url);
+      console.log(`[mzk] ${url}: pobrano przez serwer posredniczacy`);
+      return res;
+    } catch (err) {
+      bledy.push(`proxy: ${opisBledu(err)}`);
+    }
+  }
+
+  // Przerwe wlaczamy dopiero, gdy ZADNA droga nie zadzialala - inaczej
+  // zablokowalibysmy dzialajace pobieranie przez proxy.
+  if (blokadaPolaczenia) przerwaDo = Date.now() + PRZERWA_PO_BLOKADZIE_MS;
 
   throw new Error(`nie udalo sie pobrac ${url} - ${bledy.join(' | ')}`);
 }
@@ -229,6 +283,15 @@ async function fetchListing(pageUrl) {
 
 async function fetchMzk() {
   const results = [];
+
+  // Przerwa po wykryciu blokady polaczenia - zeby nie marnowac ~50 sekund
+  // kazdego cyklu na czekanie na wygasniecie limitow czasu.
+  if (Date.now() < przerwaDo) {
+    const zaIle = Math.ceil((przerwaDo - Date.now()) / 60000);
+    console.warn(`[mzk] pomijam probe - polaczenie bylo blokowane, kolejna proba za ok. ${zaIle} min`);
+    return results;
+  }
+
   try {
     let articles = [];
     for (const pageUrl of PAGE_URLS) {
@@ -236,8 +299,10 @@ async function fetchMzk() {
         articles = await fetchListing(pageUrl);
         if (articles.length) break; // udalo sie - nie probujemy kolejnego adresu
       } catch (err) {
-        // Blad jednego adresu nie moze przerwac proby kolejnego.
         console.warn(`[mzk] ${err.message}`);
+        // Blokada polaczenia dotyczy calego serwera, wiec proba kolejnego
+        // adresu na tym samym serwerze nie ma sensu - tylko wydluzylaby cykl.
+        if (toBladPolaczenia(err.message)) break;
       }
     }
     if (!articles.length) {
