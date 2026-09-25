@@ -3,11 +3,25 @@ const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
 const { extractPolishDate } = require('./polishDates');
 
-const PAGE_URL = 'https://www.mzk.zgora.pl/aktualnosci';
+// Strona MZK domyslnie pokazuje tylko 8 najnowszych wpisow. Wariant "/16/"
+// to ta sama lista z 16 pozycjami na stronie - bierzemy go jako pierwszy,
+// zeby jeden nieodswiezony cykl nie spowodowal przegapienia wpisu. Gdyby
+// ten adres przestal dzialac, uzywamy zwyklej listy.
+const PAGE_URLS = [
+  'https://www.mzk.zgora.pl/aktualnosci/16/',
+  'https://www.mzk.zgora.pl/aktualnosci',
+];
+
+// WAZNE: nazwa przegladarki bez slowa "bot". Zabezpieczenia stron czesto
+// odrzucaja zapytania z "bot" w User-Agent, odpowiadajac pusta strona z
+// kodem 200 - czyli scraper "dziala", ale nie widzi zadnych wpisow.
+// Dokladnie to bylo przyczyna tego, ze kategoria MZK przestala sie
+// aktualizowac, mimo ze strona MZK byla dostepna.
 const HEADERS = {
-  'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'pl-PL,pl;q=0.9,en;q=0.8',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7',
+  'Cache-Control': 'no-cache',
 };
 
 // Akapity typu "stopka firmowa" (nazwa spolki, adres, NIP) czesto sa
@@ -77,18 +91,19 @@ async function fetchArticleDescription(url) {
   }
 }
 
-async function fetchMzk() {
-  const results = [];
-  try {
-    const res = await fetch(PAGE_URL, { headers: HEADERS });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const html = await res.text();
-    const $ = cheerio.load(html);
-    const base = new URL(PAGE_URL).origin;
-    const seen = new Set();
-    const articles = [];
+// Pobiera liste artykulow z jednego adresu. Zwraca tablice artykulow -
+// pusta, jesli strona odpowiedziala, ale nic nie pasowalo (wtedy warto
+// sprobowac innego adresu).
+async function fetchListing(pageUrl) {
+  const res = await fetch(pageUrl, { headers: HEADERS });
+  if (!res.ok) throw new Error(`HTTP ${res.status} dla ${pageUrl}`);
+  const html = await res.text();
+  const $ = cheerio.load(html);
+  const base = new URL(pageUrl).origin;
+  const seen = new Set();
+  const articles = [];
 
-    $('a[href*="/aktualnosci/"]').each((_, el) => {
+  $('a[href*="/aktualnosci/"]').each((_, el) => {
       const $a = $(el);
       let href = $a.attr('href') || '';
       if (!/-i\d+\/?$/.test(href)) return;
@@ -117,8 +132,32 @@ async function fetchMzk() {
         if (!isNaN(d.getTime())) publishedAt = d.toISOString();
       }
 
-      articles.push({ href, title, publishedAt });
-    });
+    articles.push({ href, title, publishedAt });
+  });
+
+  // Diagnostyka: gdy strona odpowiedziala, ale nie znalezlismy ani jednego
+  // artykulu, zapisujemy w logach poczatek otrzymanej tresci. Dzieki temu
+  // od razu widac, czy dostalismy prawdziwa strone, czy np. komunikat
+  // zabezpieczenia - zamiast zgadywac przyczyne.
+  if (!articles.length) {
+    const preview = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    console.warn(`[mzk] ${pageUrl}: 0 artykulow (HTTP ${res.status}, ${html.length} znakow). Poczatek tresci: "${preview}"`);
+  }
+  return articles;
+}
+
+async function fetchMzk() {
+  const results = [];
+  try {
+    let articles = [];
+    for (const pageUrl of PAGE_URLS) {
+      articles = await fetchListing(pageUrl);
+      if (articles.length) break; // udalo sie - nie probujemy kolejnego adresu
+    }
+    if (!articles.length) {
+      console.error('[mzk] zaden z adresow nie zwrocil artykulow - sprawdz logi powyzej');
+      return results;
+    }
 
     const limited = articles.slice(0, 15);
     const descriptions = await Promise.all(

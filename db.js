@@ -48,6 +48,18 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
+  -- Stan kazdego zrodla danych. Dzieki temu wiemy, ze np. MZK od dwoch dni
+  -- nie zwraca ani jednego wpisu - appka wyglada wtedy normalnie, wiec bez
+  -- takiego zapisu problem potrafi zostac niezauwazony przez wiele dni.
+  CREATE TABLE IF NOT EXISTS source_health (
+    source TEXT PRIMARY KEY,
+    last_count INTEGER NOT NULL DEFAULT 0,
+    empty_streak INTEGER NOT NULL DEFAULT 0,
+    last_ok_at TEXT,
+    alerted INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
   CREATE TABLE IF NOT EXISTS health_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     report TEXT NOT NULL,
@@ -241,6 +253,43 @@ function getRecentFacts(limit = 20) {
 // Najnowsza zapisana ciekawostka (niezaleznie od daty). Sluzy do tego, by
 // przy braku dzisiejszej tresci pokazac uzytkownikowi od reki wczorajsza,
 // zamiast kazac mu czekac na wygenerowanie nowej.
+// Zapisuje wynik jednego cyklu dla danego zrodla i zwraca jego stan:
+// ile cykli z rzedu bylo pustych i czy wyslano juz o tym alert.
+function recordSourceResult(source, count) {
+  const previous = db.prepare('SELECT * FROM source_health WHERE source = ?').get(source);
+  const emptyStreak = count > 0 ? 0 : (previous ? previous.empty_streak : 0) + 1;
+  const alerted = count > 0 ? 0 : (previous ? previous.alerted : 0);
+  const lastOkAt = count > 0 ? new Date().toISOString() : (previous ? previous.last_ok_at : null);
+
+  db.prepare(`
+    INSERT INTO source_health (source, last_count, empty_streak, last_ok_at, alerted, updated_at)
+    VALUES (@source, @count, @emptyStreak, @lastOkAt, @alerted, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    ON CONFLICT(source) DO UPDATE SET
+      last_count = excluded.last_count,
+      empty_streak = excluded.empty_streak,
+      last_ok_at = excluded.last_ok_at,
+      alerted = excluded.alerted,
+      updated_at = excluded.updated_at
+  `).run({ source, count, emptyStreak, lastOkAt, alerted });
+
+  return {
+    emptyStreak,
+    alreadyAlerted: !!alerted,
+    lastOkAt,
+    wasBroken: !!(previous && previous.alerted),
+  };
+}
+
+// Oznacza, ze alert o tym zrodle zostal juz wyslany - zeby nie powtarzac
+// go przy kazdym cyklu scrapowania.
+function markSourceAlerted(source) {
+  db.prepare('UPDATE source_health SET alerted = 1 WHERE source = ?').run(source);
+}
+
+function listSourceHealth() {
+  return db.prepare('SELECT * FROM source_health ORDER BY source').all();
+}
+
 function getLatestFact() {
   return db.prepare('SELECT * FROM daily_fact ORDER BY fact_date DESC LIMIT 1').get();
 }
@@ -355,6 +404,9 @@ module.exports = {
   saveDailyFact,
   getRecentFacts,
   getLatestFact,
+  recordSourceResult,
+  markSourceAlerted,
+  listSourceHealth,
   saveSubscription,
   deleteSubscription,
   getAllSubscriptions,

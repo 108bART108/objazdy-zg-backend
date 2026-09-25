@@ -7,7 +7,7 @@ const cron = require('node-cron');
 const {
   listUtrudnienia, db, saveSubscription, deleteSubscription,
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
-  listHealthReports,
+  listHealthReports, listSourceHealth,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
@@ -177,6 +177,12 @@ app.post('/api/admin/healthcheck', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Stan zrodel danych - kiedy kazde z nich ostatnio cokolwiek zwrocilo.
+app.get('/api/admin/source-health', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  res.json({ items: listSourceHealth() });
 });
 
 // Historia cotygodniowych raportow zdrowia appki - do wyswietlenia w

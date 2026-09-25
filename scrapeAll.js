@@ -4,7 +4,8 @@ const { fetchEnea } = require('./enea');
 const { fetchMzk } = require('./mzk');
 const { fetchZwik } = require('./zwik');
 const { fetchZdw } = require('./zdw');
-const { upsertMany } = require('./db');
+const { upsertMany, recordSourceResult, markSourceAlerted } = require('./db');
+const { sendSystemAlert } = require('./systemAlerts');
 const { notifySubscribers } = require('./push');
 const { qualityCheck } = require('./qualityCheck');
 
@@ -62,6 +63,49 @@ function isRecentEnoughForPush(item) {
   return ageMs <= PUSH_FRESHNESS_DAYS * 86400000;
 }
 
+// Ile cykli z rzedu zrodlo moze nie zwrocic ANI JEDNEGO wpisu, zanim
+// uznamy to za awarie. Scrapowanie chodzi co 30 minut, wiec 4 cykle to
+// okolo 2 godzin - na tyle dlugo, by nie alarmowac przy chwilowej awarii
+// strony, i na tyle krotko, by nie dowiedziec sie o problemie po tygodniu.
+const EMPTY_CYCLES_BEFORE_ALERT = 4;
+
+// Zrodla, ktore moga byc puste z zalozenia (htmlSources ma celowo pusta
+// liste zrodel) - ich nie pilnujemy.
+const SOURCES_ALLOWED_EMPTY = ['htmlSources'];
+
+// Sprawdza, czy ktores zrodlo przestalo zwracac wpisy, i wysyla JEDEN
+// alert push na incydent (oraz jeden, gdy problem sam ustapi).
+async function checkSourcesHealth(perSource) {
+  for (const [source, items] of Object.entries(perSource)) {
+    if (SOURCES_ALLOWED_EMPTY.includes(source)) continue;
+
+    const state = recordSourceResult(source, items.length);
+
+    if (items.length > 0) {
+      if (state.wasBroken) {
+        console.log(`[scrapeAll] zrodlo ${source} znowu dziala (${items.length} wpisow)`);
+        await sendSystemAlert(
+          `Naprawione: ${source}`,
+          `Zrodlo ${source} znowu zwraca wpisy (${items.length}).`
+        ).catch(() => {});
+      }
+      continue;
+    }
+
+    console.warn(`[scrapeAll] zrodlo ${source}: 0 wpisow (${state.emptyStreak} cykl(i) z rzedu)`);
+
+    if (state.emptyStreak >= EMPTY_CYCLES_BEFORE_ALERT && !state.alreadyAlerted) {
+      const since = state.lastOkAt ? new Date(state.lastOkAt).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' }) : 'nieznany';
+      console.error(`[scrapeAll] ALERT: zrodlo ${source} nie zwraca wpisow od ${state.emptyStreak} cykli (ostatnio dzialalo: ${since})`);
+      await sendSystemAlert(
+        `Awaria zrodla: ${source}`,
+        `Brak wpisow od ${state.emptyStreak} cykli scrapowania. Ostatnio dzialalo: ${since}. Sprawdz logi Render.`
+      ).catch(() => {});
+      markSourceAlerted(source);
+    }
+  }
+}
+
 async function scrapeAll() {
   const started = Date.now();
   const [fromRss, fromHtml, fromEnea, fromMzk, fromZwik, fromZdw] = await Promise.all([
@@ -79,6 +123,18 @@ async function scrapeAll() {
   // niezaleznie od tego, czy dany scraper juz to zrobil wczesniej
   // (funkcja jest bezpieczna do powtornego wywolania - nie psuje juz
   // poprawionego tekstu).
+  // Kontrola zdrowia zrodel PRZED zapisem - zrodlo, ktore nagle przestaje
+  // cokolwiek zwracac, zwykle nie oznacza "brak utrudnien w miescie", tylko
+  // zepsuty scraper (np. strona zaczela blokowac nasze zapytania).
+  await checkSourcesHealth({
+    umZgora: fromRss,
+    htmlSources: fromHtml,
+    enea: fromEnea,
+    mzk: fromMzk,
+    zwik: fromZwik,
+    zdw: fromZdw,
+  }).catch((err) => console.error('[scrapeAll] blad kontroli zdrowia zrodel:', err.message));
+
   const rawItems = [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk, ...fromZwik, ...fromZdw]
     .filter((i) => i.title && i.source_url)
     .map(qualityCheck);
