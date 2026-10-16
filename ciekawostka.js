@@ -388,8 +388,30 @@ let inFlight = null;
 let lastFailedAt = 0;
 const COOLDOWN_MS = 20 * 60 * 1000;
 
+// Twardy limit kosztowy. Samonaprawa chodzi co godzine, wiec w dniu, w ktorym
+// generowanie uparcie pada (awaria API, zrodla nie do zweryfikowania), bez
+// tego limitu poszloby 18 pelnych cykli po trzy proby - kilkaset platnych
+// zapytan z wyszukiwaniem w internecie w jedna dobe. Cztery cykle dziennie
+// w zupelnosci wystarczaja, zeby odrobic chwilowa awarie, a koszt w najgorszym
+// dniu pozostaje przewidywalny. Reczne wymuszenie linkiem limitu nie dotyczy.
+const MAX_CYCLES_PER_DAY = 4;
+let cycleDate = null;
+let cyclesToday = 0;
+
+function budgetLeft() {
+  const today = todayDate();
+  if (cycleDate !== today) { cycleDate = today; cyclesToday = 0; }
+  return cyclesToday < MAX_CYCLES_PER_DAY;
+}
+
 function startGeneration() {
   if (inFlight) return inFlight;
+
+  if (!budgetLeft()) {
+    console.warn(`[ciekawostka] wyczerpany dzienny limit ${MAX_CYCLES_PER_DAY} prob generowania - kolejna dopiero jutro`);
+    return Promise.resolve(null);
+  }
+  cyclesToday += 1;
 
   inFlight = generateFactViaClaude(getRecentFacts(20))
     .then((content) => {
@@ -435,6 +457,10 @@ async function ensureTodayFact() {
 
   if (Date.now() - lastFailedAt < COOLDOWN_MS && !inFlight) {
     console.log('[ciekawostka] po nieudanej probie czekam z kolejna - przerwa karencyjna');
+    return { date, content: null, generated: false };
+  }
+
+  if (!inFlight && !budgetLeft()) {
     return { date, content: null, generated: false };
   }
 
