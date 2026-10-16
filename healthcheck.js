@@ -56,6 +56,10 @@ async function runWeeklyHealthCheck() {
   lines.push(...textSanity.lines);
   if (textSanity.hasProblem) hasProblem = true;
 
+  const factCoverage = checkCiekawostkaCoverage();
+  lines.push(...factCoverage.lines);
+  if (factCoverage.hasProblem) hasProblem = true;
+
   const report = lines.join('\n');
   console.log(`[healthcheck] wynik:\n${report}`);
 
@@ -146,6 +150,28 @@ function checkTextSanity() {
   for (const [key, problems] of byCategory) {
     lines.push(`   • ${key}: ${[...problems].join('; ')}`);
   }
+  return { lines, hasProblem: true };
+}
+
+// Ciekawostka jest generowana w trybie "fail closed": jesli zaden z trzech
+// wariantow nie przejdzie kontroli jezykowej, appka swiadomie NIE publikuje
+// nic na dany dzien (uzytkownik widzi wtedy lokalna ciekawostke zapasowa).
+// To bezpieczne, ale ciche - dlatego raz w tygodniu liczymy, ile dni z
+// ostatnich siedmiu ma zapisana ciekawostke. Pojedynczy brak to norma,
+// wiecej niz dwa oznaczaja, ze kontrola odrzuca za duzo i trzeba zajrzec
+// w logi Render po konkretne komunikaty "[ciekawostka] odrzucam tekst".
+function checkCiekawostkaCoverage() {
+  const row = db.prepare(`
+    SELECT COUNT(*) as cnt FROM daily_fact
+    WHERE fact_date >= date('now', '-6 days')
+  `).get();
+
+  const lines = [];
+  if (row.cnt >= 6) {
+    lines.push(`✅ Ciekawostka: ${row.cnt}/7 dni z ostatniego tygodnia`);
+    return { lines, hasProblem: false };
+  }
+  lines.push(`⚠️ Ciekawostka: tylko ${row.cnt}/7 dni - kontrola jezykowa odrzuca za duzo tekstow, sprawdz logi`);
   return { lines, hasProblem: true };
 }
 

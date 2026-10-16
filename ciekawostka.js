@@ -1,6 +1,13 @@
 const { getDailyFact, deleteDailyFact, saveDailyFact, getRecentFacts } = require('./db');
+const { checkSpelling } = require('./polishSpell');
 
-const MODEL = 'claude-haiku-4-5-20251001';
+// Model do zadan jezykowych. Haiku generowalo poprawne fakty, ale myliło sie
+// w odmianie ("miasto srokow" zamiast "miasto srok", "Niemczyko-polskie").
+// Przy jednej ciekawostce dziennie roznica w koszcie jest groszowa, a jakosc
+// polszczyzny wyraznie lepsza. MODEL_FALLBACK chroni przed sytuacja, w ktorej
+// konto nie ma dostepu do mocniejszego modelu - wtedy dzialamy jak dotad.
+const MODEL = process.env.CIEKAWOSTKA_MODEL || 'claude-sonnet-5';
+const MODEL_FALLBACK = 'claude-haiku-4-5-20251001';
 
 function todayDate() {
   const now = new Date();
@@ -11,26 +18,40 @@ function todayDate() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+let activeModel = MODEL;
+
 async function callClaude(prompt, useSearch) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('Brak ANTHROPIC_API_KEY w zmiennych srodowiskowych');
 
-  const body = {
-    model: MODEL,
-    max_tokens: 700,
-    messages: [{ role: 'user', content: prompt }],
-  };
-  if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
+  const send = async (model) => {
+    const body = {
+      model,
+      max_tokens: 900,
+      messages: [{ role: 'user', content: prompt }],
+    };
+    if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(body),
-  });
+    return fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(body),
+    });
+  };
+
+  let res = await send(activeModel);
+
+  // Konto moze nie miec dostepu do wybranego modelu - wtedy raz na zawsze
+  // przelaczamy sie na model zapasowy zamiast przerywac generowanie.
+  if (!res.ok && (res.status === 404 || res.status === 400) && activeModel !== MODEL_FALLBACK) {
+    console.warn(`[ciekawostka] model ${activeModel} niedostepny - przechodze na ${MODEL_FALLBACK}`);
+    activeModel = MODEL_FALLBACK;
+    res = await send(activeModel);
+  }
 
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
@@ -113,14 +134,52 @@ function looksLikeMetaCommentary(text) {
   if (!text) return true;
   if (text.length > 550) return true;
   if (text.includes('**')) return true;
+  // Tylko mocne sygnaly. Wczesniej byly tu tez zwroty wystepujace normalnie
+  // w polskiej prozie ("zanim", "okazuje sie") - niepotrzebnie kasowaly
+  // poprawne ciekawostki i zuzywaly jedna z trzech prob.
   const suspiciousPhrases = [
-    'zanim', 'muszę sprawdzić', 'musze sprawdzic', 'po analizie', 'po dokładnej analizie',
+    'muszę sprawdzić', 'musze sprawdzic', 'po analizie', 'po dokładnej analizie',
     'po dokladnej analizie', 'sprawdzam', 'sprawdziłem', 'sprawdzilem', 'mogę potwierdzić',
-    'moge potwierdzic', 'weryfikacja', 'okazuje się', 'okazuje sie', 'błędy językowo',
-    'bledy jezykowo', 'poprawiona wersja', 'oto poprawiona', 'tekst zawiera',
+    'moge potwierdzic', 'weryfikacja wykazala', 'weryfikacja wykazała',
+    'błędy językowe', 'bledy jezykowe', 'poprawiona wersja', 'oto poprawiona',
+    'tekst zawiera', 'tekst jest poprawny', 'bez zmian', 'finalna wersja',
   ];
   const lower = text.toLowerCase();
   return suspiciousPhrases.some((p) => lower.includes(p));
+}
+
+// KROK 4: punktowa naprawa. Gdy slownik wylapie konkretne slowo, nie warto
+// wyrzucac calej ciekawostki i szukac nowego faktu - taniej i skuteczniej
+// jest wskazac modelowi dokladnie to slowo i kazac poprawic wylacznie je.
+// Dzieki temu "miasto srokow" staje sie "miasto srok", a sam fakt zostaje.
+async function repairFact(text, problems) {
+  const prompt = `Ponizszy tekst zawiera bledy jezykowe. Automatyczny slownik jezyka polskiego oznaczyl konkretne problemy - popraw DOKLADNIE te miejsca.
+
+TEKST:
+"${text}"
+
+WYKRYTE PROBLEMY:
+${problems.map((p) => `- ${p}`).join('\n')}
+
+Zasady:
+- Jesli slownik oznaczyl slowo jako nieznane, to najczesciej bledna forma odmiany. Ustal poprawna forme i wstaw ja. Przyklady poprawnych form dopelniacza liczby mnogiej: "srok" (nie "srokow"), "ulic" (nie "ulicow"), "winnic" (nie "winnicow"), "kobiet" (nie "kobietow").
+- Jesli slowo w ogole nie istnieje w polszczyznie, zastap je istniejacym slowem o tym samym znaczeniu.
+- NIE zmieniaj faktow: dat, liczb, nazwisk, nazw miejsc ani sensu zdania.
+- Jesli problemem jest dlugosc, szyk lub brak kropki - popraw to, nie skracajac tresci merytorycznej.
+
+FORMAT ODPOWIEDZI - obowiazkowy. Na samym koncu umiesc poprawiony tekst dokladnie tak:
+
+<poprawiona>
+(tutaj poprawiony tekst, bez cudzyslowow i bez komentarzy)
+</poprawiona>`;
+
+  const out = await callClaude(prompt, false);
+  const match = out.match(/<poprawiona>([\s\S]*?)<\/poprawiona>/i);
+  if (!match) {
+    console.warn('[ciekawostka] naprawa nie uzyla znacznikow - pomijam');
+    return null;
+  }
+  return match[1].trim().slice(0, 500);
 }
 
 // KROK 3: korekta czysto jezykowa. Osobne, waskie zadanie - model nie
@@ -134,9 +193,12 @@ TEKST:
 
 Twoje JEDYNE zadanie to poprawic bledy jezykowe. Zwroc szczegolna uwage na:
 - nieistniejace slowa i bledne formy zlozone (np. "Niemczyko-polskie" zamiast "niemiecko-polskie")
+- DOPELNIACZ LICZBY MNOGIEJ rzeczownikow zenskich - to najczestszy blad. Rzeczowniki zenskie na -a maja w dopelniaczu liczby mnogiej koncowke ZEROWA, nie "-ow": "sroka" daje "srok" (NIE "srokow"), "ulica" daje "ulic" (NIE "ulicow"), "kobieta" daje "kobiet" (NIE "kobietow"), "winnica" daje "winnic" (NIE "winnicow")
 - odmiane imion i nazwisk (np. "malzenstwo Johanna i Franciszek Juchniewiczowie zlecilo" jest bledne - poprawnie "malzenstwo Johanny i Franciszka Juchniewiczow zlecilo")
 - zgodnosc rodzaju, liczby i przypadka miedzy podmiotem a orzeczeniem
 - szyk zdania, interpunkcje, polskie znaki diakrytyczne
+
+ZANIM podasz wynik, wykonaj kontrole: wypisz kazdy rzeczownik uzyty w liczbie mnogiej i sprawdz jego forme. Dopiero potem zbuduj finalna wersje.
 
 NIE zmieniaj tresci merytorycznej: dat, nazwisk, liczb, nazw miejsc ani sensu zdania. Popraw wylacznie forme jezykowa.
 
@@ -173,7 +235,8 @@ function normalize(s) {
     .replace(/[śŚ]/g, 's').replace(/[żŻźŹ]/g, 'z');
 }
 
-function checkPolishSanity(text) {
+// Kontrola strukturalna - tania, synchroniczna, bez slownika.
+function checkStructure(text) {
   const problems = [];
   if (!text || !text.trim()) return ['tekst pusty'];
 
@@ -210,6 +273,33 @@ function checkPolishSanity(text) {
   return problems;
 }
 
+// Pelna kontrola: struktura + prawdziwy slownik jezyka polskiego.
+// Slowa z malej litery, ktorych nie zna slownik, to realne bledy odmiany
+// albo wyrazy nieistniejace - odrzucamy tekst. Slowa z wielkiej litery to
+// najczesciej nazwy wlasne spoza slownika, wiec tylko je logujemy.
+async function checkPolishSanity(text) {
+  const problems = checkStructure(text);
+  if (!text || !text.trim()) return problems;
+
+  try {
+    const spell = await checkSpelling(text);
+    if (!spell.available) {
+      console.warn(`[ciekawostka] slownik niedostepny (${spell.reason}) - pomijam kontrole ortografii`);
+      return problems;
+    }
+    if (spell.unknownLower.length) {
+      problems.push(`slowa nieznane slownikowi: ${spell.unknownLower.join(', ')}`);
+    }
+    if (spell.unknownUpper.length) {
+      console.log(`[ciekawostka] nazwy wlasne spoza slownika (dopuszczone): ${spell.unknownUpper.join(', ')}`);
+    }
+  } catch (err) {
+    console.warn('[ciekawostka] blad kontroli ortografii:', err.message);
+  }
+
+  return problems;
+}
+
 const MAX_ATTEMPTS = 3;
 
 // Pelny cykl: generowanie -> weryfikacja faktu -> korekta jezykowa ->
@@ -238,10 +328,28 @@ async function generateFactViaClaude(avoidList) {
       const proofed = await proofreadFact(reviewed);
       if (proofed && !looksLikeMetaCommentary(proofed)) candidate = proofed;
 
-      const problems = checkPolishSanity(candidate);
+      let problems = await checkPolishSanity(candidate);
+
+      // Jedna proba punktowej naprawy wskazanych bledow. Naprawiony tekst
+      // przechodzi dokladnie te same kontrole - przyjmujemy go tylko wtedy,
+      // gdy jest calkowicie czysty.
       if (problems.length) {
-        console.warn(`[ciekawostka] proba ${attempt}/${MAX_ATTEMPTS}: kontrola jezykowa odrzucila tekst (${problems.join('; ')})`);
-        console.warn(`[ciekawostka] odrzucony tekst: "${candidate}"`);
+        console.warn(`[ciekawostka] proba ${attempt}/${MAX_ATTEMPTS}: kontrola znalazla bledy (${problems.join('; ')}) - probuje naprawic`);
+        const repaired = await repairFact(candidate, problems);
+        if (repaired && !looksLikeMetaCommentary(repaired)) {
+          const afterRepair = await checkPolishSanity(repaired);
+          if (!afterRepair.length) {
+            console.log(`[ciekawostka] naprawa udana: "${candidate}" -> "${repaired}"`);
+            candidate = repaired;
+            problems = [];
+          } else {
+            console.warn(`[ciekawostka] po naprawie nadal bledy (${afterRepair.join('; ')})`);
+          }
+        }
+      }
+
+      if (problems.length) {
+        console.warn(`[ciekawostka] proba ${attempt}/${MAX_ATTEMPTS}: odrzucam tekst "${candidate}"`);
         continue;
       }
 
