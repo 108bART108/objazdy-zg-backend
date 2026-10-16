@@ -7,6 +7,7 @@ const cron = require('node-cron');
 const {
   listUtrudnienia, db, saveSubscription, deleteSubscription,
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
+  getRandomFact,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact, ensureTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
@@ -63,6 +64,16 @@ app.get('/api/ciekawostka', async (_req, res) => {
     console.error('[ciekawostka] blad generowania:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Losowa ciekawostka z archiwum - uzywana przez przycisk "Zobacz starsze
+// ciekawostki", gdy dzisiejsza jeszcze nie jest gotowa. Czyta tylko z bazy,
+// nie wola API, wiec nic nie kosztuje i odpowiada natychmiast.
+app.get('/api/ciekawostka/losowa', (req, res) => {
+  const exclude = typeof req.query.pomin === 'string' ? req.query.pomin : '';
+  const fact = getRandomFact(exclude);
+  if (!fact) return res.json({ date: null, content: null });
+  res.json({ date: fact.fact_date, content: fact.content });
 });
 
 // Wymusza usuniecie dzisiejszej ciekawostki i wygenerowanie nowej -
