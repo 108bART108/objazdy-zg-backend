@@ -25,9 +25,14 @@ async function callClaude(prompt, useSearch) {
   if (!apiKey) throw new Error('Brak ANTHROPIC_API_KEY w zmiennych srodowiskowych');
 
   const send = async (model) => {
+    // Limit musi byc wysoki, bo przy wlaczonym wyszukiwaniu wyniki z
+    // internetu zjadaja budzet tokenow ZANIM model napisze ciekawostke.
+    // Przy limicie 900 odpowiedzi wracaly puste albo urwane przed
+    // znacznikami. Platne sa tokeny faktycznie uzyte, nie sam limit,
+    // wiec wyzszy limit nic nie kosztuje, dopoki nie jest potrzebny.
     const body = {
       model,
-      max_tokens: 900,
+      max_tokens: useSearch ? 4096 : 2048,
       messages: [{ role: 'user', content: prompt }],
     };
     if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -66,7 +71,12 @@ async function callClaude(prompt, useSearch) {
     .replace(/\s+/g, ' ')
     .trim();
 
-  if (!text) throw new Error('Pusta odpowiedz z Anthropic API');
+  // Pusta odpowiedz prawie zawsze znaczy, ze zabraklo tokenow albo ze model
+  // zwrocil wylacznie bloki wyszukiwania. Logujemy powod, zeby nie zgadywac.
+  if (!text) {
+    const types = (data.content || []).map((b) => b.type).join(', ') || 'brak blokow';
+    throw new Error(`Pusta odpowiedz z Anthropic API (stop_reason: ${data.stop_reason}, bloki: ${types})`);
+  }
   return text;
 }
 
@@ -368,21 +378,68 @@ async function generateFactViaClaude(avoidList) {
   return null;
 }
 
+// Generowanie chodzi w tle i jest pilnowane dwoma zamkami, zeby jedna
+// nieudana proba nie zamienila sie w lawine wywolan API: inFlight nie
+// pozwala uruchomic dwoch generowan naraz (appke otwiera wielu uzytkownikow
+// w tej samej chwili), a COOLDOWN wstrzymuje kolejne podejscie na 20 minut
+// po nieudanym. Bez tego kazde wejscie do appki w dniu, w ktorym kontrola
+// odrzuca teksty, odpalaloby komplet zapytan z wyszukiwaniem w internecie.
+let inFlight = null;
+let lastFailedAt = 0;
+const COOLDOWN_MS = 20 * 60 * 1000;
+
+function startGeneration() {
+  if (inFlight) return inFlight;
+
+  inFlight = generateFactViaClaude(getRecentFacts(20))
+    .then((content) => {
+      if (content) {
+        saveDailyFact(todayDate(), content);
+        lastFailedAt = 0;
+        console.log('[ciekawostka] zapisano nowa ciekawostke na dzis');
+      } else {
+        lastFailedAt = Date.now();
+      }
+      return content;
+    })
+    .catch((err) => {
+      lastFailedAt = Date.now();
+      console.error('[ciekawostka] generowanie zakonczone bledem:', err.message);
+      return null;
+    })
+    .finally(() => { inFlight = null; });
+
+  return inFlight;
+}
+
+// Odpowiedz dla appki. Nigdy nie kaze uzytkownikowi czekac na generowanie -
+// jesli ciekawostki jeszcze nie ma, uruchamia ja w tle i zwraca null, a
+// frontend pokazuje swoja lokalna ciekawostke zapasowa. Przy nastepnym
+// otwarciu appki nowa ciekawostka juz tam bedzie.
 async function getTodayFact() {
   const date = todayDate();
   const cached = getDailyFact(date);
   if (cached) return { date, content: cached.content, generated: false };
 
-  const recentFacts = getRecentFacts(20);
-  const content = await generateFactViaClaude(recentFacts);
+  if (!inFlight && Date.now() - lastFailedAt > COOLDOWN_MS) startGeneration();
+  return { date, content: null, generated: false };
+}
 
-  // content === null oznacza, ze zaden wariant nie przeszedl kontroli.
-  // Nie zapisujemy wtedy niczego do bazy - jutrzejsza proba zacznie od zera,
-  // a frontend pokaze swoja lokalna ciekawostke zapasowa.
-  if (!content) return { date, content: null, generated: false };
+// Wolane z harmonogramu (patrz server.js). Czeka na wynik, zeby logi Render
+// pokazywaly, czy dzienna ciekawostka faktycznie powstala. Jesli juz jest,
+// nie robi nic - dzieki temu mozna to wolac co godzine jako samonaprawe
+// po dniu, w ktorym generowanie odpadlo na kontroli jezykowej.
+async function ensureTodayFact() {
+  const date = todayDate();
+  if (getDailyFact(date)) return { date, content: getDailyFact(date).content, generated: false };
 
-  saveDailyFact(date, content);
-  return { date, content, generated: true };
+  if (Date.now() - lastFailedAt < COOLDOWN_MS && !inFlight) {
+    console.log('[ciekawostka] po nieudanej probie czekam z kolejna - przerwa karencyjna');
+    return { date, content: null, generated: false };
+  }
+
+  const content = await startGeneration();
+  return { date, content: content || null, generated: Boolean(content) };
 }
 
 // Usuwa dzisiejsza, juz zapisana ciekawostke i generuje nowa od zera -
@@ -392,13 +449,18 @@ async function getTodayFact() {
 async function forceRegenerateTodayFact() {
   const date = todayDate();
   deleteDailyFact(date);
+  // Reczne wymuszenie pomija przerwe karencyjna - skoro klikasz, to chcesz teraz.
+  lastFailedAt = 0;
   const recentFacts = getRecentFacts(20);
   const content = await generateFactViaClaude(recentFacts);
   if (!content) {
+    lastFailedAt = Date.now();
     throw new Error('Nie udalo sie wygenerowac ciekawostki, ktora przeszlaby kontrole jezykowa - sprobuj ponownie');
   }
   saveDailyFact(date, content);
   return { date, content, generated: true };
 }
 
-module.exports = { getTodayFact, forceRegenerateTodayFact, checkPolishSanity };
+module.exports = {
+  getTodayFact, ensureTodayFact, forceRegenerateTodayFact, checkPolishSanity,
+};

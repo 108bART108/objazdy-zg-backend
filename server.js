@@ -9,7 +9,7 @@ const {
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
-const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
+const { getTodayFact, ensureTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
 const { notifySubscribers } = require('./push');
 const { runWeeklyHealthCheck } = require('./healthcheck');
 const { runDailyAdCheck } = require('./adReminders');
@@ -296,6 +296,21 @@ cron.schedule('30 15 * * 0', () => {
   runWeeklyHealthCheck().catch((err) => console.error('[cron] blad przegladu:', err));
 }, { timezone: 'Europe/Warsaw' });
 
+// Dzienna ciekawostka. Pierwsze podejscie o 5:20 rano, zeby byla gotowa,
+// zanim ktokolwiek otworzy appke. Potem co godzine az do 22:00 - ale
+// ensureTodayFact nie robi nic, jesli ciekawostka na dzis juz jest, wiec
+// te kolejne uruchomienia to tylko samonaprawa na wypadek, gdyby poranne
+// generowanie odpadlo na kontroli jezykowej albo API bylo chwilowo
+// niedostepne. Dzieki temu dzien bez ciekawostki praktycznie sie nie zdarza,
+// a appka nigdy nie publikuje tekstu, ktory nie przeszedl kontroli.
+cron.schedule('20 5-22 * * *', () => {
+  ensureTodayFact()
+    .then((fact) => {
+      if (fact.generated) console.log('[cron] wygenerowano ciekawostke na dzis');
+    })
+    .catch((err) => console.error('[cron] blad ciekawostki:', err.message));
+}, { timezone: 'Europe/Warsaw' });
+
 // Codzienne sprawdzenie reklam (wygasle -> wylacz, wygasajace za <=7 dni -> przypomnienie)
 // - codziennie o 8:00 czasu polskiego
 cron.schedule('0 8 * * *', () => {
@@ -304,3 +319,12 @@ cron.schedule('0 8 * * *', () => {
 }, { timezone: 'Europe/Warsaw' });
 
 scrapeAll().catch((err) => console.error('[start] blad pierwszego scrapowania:', err));
+
+// Przy starcie serwera tez sprawdzamy, czy ciekawostka na dzis istnieje.
+// Render restartuje usluge przy kazdym deployu, wiec bez tego ciekawostka
+// po wdrozeniu w ciagu dnia czekalaby do najblizszej pelnej godziny.
+ensureTodayFact()
+  .then((fact) => {
+    if (fact.generated) console.log('[start] wygenerowano ciekawostke na dzis');
+  })
+  .catch((err) => console.error('[start] blad ciekawostki:', err.message));
