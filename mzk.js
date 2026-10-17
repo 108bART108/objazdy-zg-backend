@@ -1,244 +1,120 @@
 const cheerio = require('cheerio');
-const https = require('https');
 const { extractStreet } = require('./classify');
-const { qualityCheck } = require('./qualityCheck');
-const { extractPolishDate } = require('./polishDates');
 
-// Strona MZK domyslnie pokazuje tylko 8 najnowszych wpisow. Wariant "/16/"
-// to ta sama lista z 16 pozycjami na stronie - bierzemy go jako pierwszy,
-// zeby jeden nieodswiezony cykl nie spowodowal przegapienia wpisu. Gdyby
-// ten adres przestal dzialac, uzywamy zwyklej listy.
-const PAGE_URLS = [
-  'https://www.mzk.zgora.pl/aktualnosci/16/',
-  'https://www.mzk.zgora.pl/aktualnosci',
-];
+const PAGE_URL = 'https://www.mzk.zgora.pl/aktualnosci';
+const HEADERS = { 'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)' };
 
-// WAZNE: nazwa przegladarki bez slowa "bot". Zabezpieczenia stron czesto
-// odrzucaja zapytania z "bot" w User-Agent, odpowiadajac pusta strona z
-// kodem 200 - czyli scraper "dziala", ale nie widzi zadnych wpisow.
-// Dokladnie to bylo przyczyna tego, ze kategoria MZK przestala sie
-// aktualizowac, mimo ze strona MZK byla dostepna.
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7',
-  'Cache-Control': 'no-cache',
-};
+// Teksty nawigacyjne i stopkowe, ktore nie sa trescia komunikatu.
+const NOISE_RE = /^(menu|aktualnosci|aktualności|rozk[lł]ady|rozk[lł]ad jazdy|kontakt|strona g[lł][oó]wna|czytaj wi[eę]cej|wi[eę]cej|wstecz|powr[oó]t|bilety|cennik|szukaj|galeria|archiwum|polityka|cookies|deklaracja|mapa strony|bip|o nas|przetargi|praca)\b/i;
 
-// Akapity typu "stopka firmowa" (nazwa spolki, adres, NIP) czesto sa
-// dluzsze niz 60 znakow i pojawiaja sie PRZED wlasciwa trescia komunikatu
-// - trzeba je jawnie pomijac, zamiast brac "pierwszy dluzszy <p>".
-const BOILERPLATE_RE = /sp[oó]łka z ograniczon[aą] odpowiedzialno|\bnip:?\s*\d|\bregon:?\s*\d|pliki?\s+cookies?|ustawie(ń|niami)?\s+(dotycz\S*\s+)?cookies|ustawieniami\s+przegl\p{L}darki|korzystaj\p{L}c\s+z\s+(naszego\s+)?serwisu\s+bez\s+zmiany/iu;
+// Buduje opis komunikatu z CALEJ tresci artykulu, w kolejnosci wystepowania.
+//
+// Poprzednia wersja brala pierwszy akapit dluzszy niz 60 znakow i na tym
+// konczyla. Komunikaty MZK maja jednak uklad: krotki wstep ("Informujemy, ze
+// od poniedzialku (19 pazdziernika) nastapi:"), potem lista punktow, potem
+// dalszy ciag zdania. Wstep bywa krotszy niz 60 znakow, a punkty listy to
+// <li>, nie <p> - przez to opis zaczynal sie w polowie mysli, od slow
+// "w zwiazku z powyzszym", chociaz zadnego "powyzszego" czytelnik nie widzial.
+function extractArticleText($) {
+  // Usuwamy nawigacje i stopke, zeby pozycje menu (zwykle <li>) nie trafily
+  // do opisu.
+  $('nav, header, footer, aside, script, style, form, noscript').remove();
+  $('[class*="menu"], [class*="nav"], [id*="menu"], [id*="nav"], [class*="footer"], [class*="stopka"], [class*="breadcrumb"]').remove();
 
-// ===================== POBIERANIE STRONY Z OBEJSCIAMI =====================
-// Serwer Render nie potrafil polaczyc sie z mzk.zgora.pl - fetch konczyl sie
-// bledem "fetch failed" po ~10 sekundach, czyli po limicie czasu na
-// polaczenie. Nie byla to blokada bota (nie dostalismy zadnej odpowiedzi),
-// tylko problem z samym polaczeniem. Dlatego probujemy po kolei:
-//   1. zwykly fetch (IPv6 albo IPv4, zaleznie od systemu),
-//   2. wymuszone IPv4 - czesta przyczyna takich bledow to niedzialajacy
-//      adres IPv6 strony, na ktory Node trafia jako pierwszy,
-//   3. opcjonalny serwer posredniczacy, jesli ustawisz zmienna
-//      srodowiskowa MZK_PROXY_URL (np. "https://api.allorigins.win/raw?url=").
-//      Przydatne, gdyby strona blokowala adresy IP serwerowni.
-// Kazda nieudana proba trafia do logow z konkretna przyczyna, zamiast
-// ogolnego "fetch failed".
-
-// Gdy strona blokuje nasz adres IP, kazda proba konczy sie dopiero po
-// wygasnieciu limitu czasu - a to oznacza, ze KAZDY cykl scrapowania
-// (co 30 minut) marnuje kilkadziesiat sekund na czekanie. Dlatego po
-// wykryciu problemu z samym polaczeniem robimy godzinna przerwe:
-// scraper nie probuje w kolko, ale co godzine sprawdza, czy blokada
-// zostala zdjeta.
-const PRZERWA_PO_BLOKADZIE_MS = 60 * 60 * 1000;
-let przerwaDo = 0;
-let wolProxy = false; // po nieudanym polaczeniu bezposrednim zaczynamy od proxy
-
-function toBladPolaczenia(komunikat) {
-  return /CONNECT_TIMEOUT|przekroczony czas|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(komunikat);
-}
-
-function opisBledu(err) {
-  const cause = err && err.cause;
-  if (cause && (cause.code || cause.message)) {
-    return `${err.message} (${cause.code || ''} ${cause.message || ''})`.trim();
-  }
-  return err ? err.message : 'nieznany blad';
-}
-
-// Pobranie przez modul https z wymuszona wersja protokolu IP.
-function fetchPrzezHttps(url, family, timeoutMs = 15000, redirectsLeft = 2) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: HEADERS, family, timeout: timeoutMs }, (res) => {
-      const { statusCode, headers } = res;
-      if (statusCode >= 300 && statusCode < 400 && headers.location && redirectsLeft > 0) {
-        res.resume();
-        const next = new URL(headers.location, url).href;
-        fetchPrzezHttps(next, family, timeoutMs, redirectsLeft - 1).then(resolve, reject);
-        return;
-      }
-      if (statusCode >= 400) {
-        res.resume();
-        reject(new Error(`HTTP ${statusCode}`));
-        return;
-      }
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve({ status: statusCode, html: Buffer.concat(chunks).toString('utf8') }));
+  // Kontener tresci: wybieramy ten, ktory zawiera najwiecej tekstu.
+  // Nie zakladamy konkretnej nazwy klasy, bo strona zrodlowa moze ja zmienic.
+  let best = null;
+  let bestLen = 0;
+  $('article, main, [class*="content"], [class*="article"], [class*="news"], [class*="tresc"], [class*="post"], [id*="content"], [id*="tresc"]')
+    .each((_, el) => {
+      const len = $(el).find('p, li').text().replace(/\s+/g, ' ').trim().length;
+      if (len > bestLen) { bestLen = len; best = el; }
     });
-    req.on('timeout', () => req.destroy(new Error(`przekroczony czas ${timeoutMs}ms`)));
-    req.on('error', reject);
+  const scope = best ? $(best) : $('body');
+
+  const parts = [];
+  const seen = new Set();
+
+  scope.find('p, li').each((_, el) => {
+    const $el = $(el);
+    // Pomijamy kontenery zawierajace kolejne p/li - inaczej ten sam tekst
+    // trafilby do opisu dwa razy (raz z rodzica, raz z dziecka).
+    if ($el.find('p, li').length) return;
+
+    const text = $el.text().replace(/\s+/g, ' ').trim();
+    if (text.length < 8) return;
+    if (NOISE_RE.test(text)) return;
+    // Krotki element bedacy w calosci linkiem to prawie na pewno nawigacja.
+    if (text.length < 40 && $el.find('a').length && $el.find('a').text().trim().length >= text.length - 2) return;
+
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    parts.push({ tag: (el.tagName || el.name || '').toLowerCase(), text });
   });
-}
 
-async function przezProxy(url) {
-  const proxy = process.env.MZK_PROXY_URL;
-  if (!proxy) throw new Error('MZK_PROXY_URL nie jest ustawione');
-  const res = await fetch(proxy + encodeURIComponent(url), { headers: HEADERS });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return { status: res.status, html: await res.text() };
-}
+  if (!parts.length) return null;
 
-async function bezposrednio(url) {
-  const bledy = [];
-  try {
-    const res = await fetch(url, { headers: HEADERS });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { status: res.status, html: await res.text() };
-  } catch (err) {
-    bledy.push(`fetch: ${opisBledu(err)}`);
-  }
-  try {
-    const res = await fetchPrzezHttps(url, 4, 8000);
-    console.log(`[mzk] ${url}: zwykly fetch zawiodl, ale IPv4 zadzialalo`);
-    return res;
-  } catch (err) {
-    bledy.push(`IPv4: ${opisBledu(err)}`);
-  }
-  throw new Error(bledy.join(' | '));
-}
+  // Sklejanie z zachowaniem sensu zdania.
+  let out = parts[0].text;
+  for (let i = 1; i < parts.length; i += 1) {
+    const { tag, text } = parts[i];
+    const endsOpen = /[:;,]$/.test(out);
 
-async function pobierzStrone(url) {
-  const bledy = [];
-  const mamyProxy = !!process.env.MZK_PROXY_URL;
-  let probowanoProxy = false;
-
-  // Jesli poprzednio polaczenie bezposrednie bylo blokowane, a mamy
-  // skonfigurowany serwer posredniczacy - zaczynamy od niego, zeby nie
-  // czekac za kazdym razem na wygasniecie limitow czasu.
-  if (mamyProxy && wolProxy) {
-    probowanoProxy = true;
-    try {
-      const res = await przezProxy(url);
-      console.log(`[mzk] ${url}: pobrano przez serwer posredniczacy`);
-      return res;
-    } catch (err) {
-      bledy.push(`proxy: ${opisBledu(err)}`);
+    if (tag === 'li') {
+      out += endsOpen ? ` ${text}` : `; ${text}`;
+    } else if (/^[a-ząćęłńóśźż]/.test(text)) {
+      // Akapit zaczynajacy sie mala litera to dalszy ciag zdania przerwanego
+      // lista - laczymy przecinkiem, nie kropka, zeby nie tworzyc zdania
+      // rozpoczynajacego sie od malej litery.
+      out = out.replace(/[.;]\s*$/, '');
+      out += /,$/.test(out) ? ` ${text}` : `, ${text}`;
+    } else {
+      out += /[.!?:;]$/.test(out) ? ` ${text}` : `. ${text}`;
     }
   }
 
-  let blokadaPolaczenia = false;
-  try {
-    const res = await bezposrednio(url);
-    wolProxy = false;
-    przerwaDo = 0; // polaczenie znow dziala - koniec przerwy
-    return res;
-  } catch (err) {
-    bledy.push(err.message);
-    blokadaPolaczenia = toBladPolaczenia(err.message);
-    if (blokadaPolaczenia) wolProxy = true;
-  }
+  return out;
+}
 
-  // Proxy jako ostatnia deska ratunku - takze wtedy, gdy polaczenie
-  // bezposrednie jest blokowane (to wlasnie po to je ustawiamy).
-  if (mamyProxy && !probowanoProxy) {
-    try {
-      const res = await przezProxy(url);
-      console.log(`[mzk] ${url}: pobrano przez serwer posredniczacy`);
-      return res;
-    } catch (err) {
-      bledy.push(`proxy: ${opisBledu(err)}`);
-    }
-  }
-
-  // Przerwe wlaczamy dopiero, gdy ZADNA droga nie zadzialala - inaczej
-  // zablokowalibysmy dzialajace pobieranie przez proxy.
-  if (blokadaPolaczenia) przerwaDo = Date.now() + PRZERWA_PO_BLOKADZIE_MS;
-
-  throw new Error(`nie udalo sie pobrac ${url} - ${bledy.join(' | ')}`);
+// Przycina opis do limitu, ale na granicy zdania lub punktu listy,
+// zeby nie urywac w polowie slowa.
+function trimDescription(text, limit = 600) {
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit);
+  const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('; '));
+  if (lastStop > limit * 0.5) return cut.slice(0, lastStop + 1).trim();
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${cut.slice(0, lastSpace > 0 ? lastSpace : limit).trim()}...`;
 }
 
 async function fetchArticleDescription(url) {
   try {
-    const { html } = await pobierzStrone(url);
+    const res = await fetch(url, { headers: HEADERS });
+    if (!res.ok) return null;
+    const html = await res.text();
     const $ = cheerio.load(html);
-
-    // Wstaw spacje w miejscu <br>, zeby sklejone linie nie zlepily sie
-    // w jedno slowo po .text() - dotyczy calego dokumentu, nie tylko
-    // wybranego akapitu, bo listy (<ul>) tez czesto uzywaja <br>.
-    $('br').replaceWith(' ');
-
-    // Krok 1: znajdz PIERWSZY sensowny (nie-boilerplate) akapit dluzszy
-    // niz 60 znakow - to nasz kandydat na opis.
-    let $candidate = null;
-    let candidateText = null;
-    $('p').each((_, el) => {
-      if (candidateText) return;
-      const $el = $(el);
-      const t = $el.text().replace(/\s+/g, ' ').trim();
-      if (t.length > 60 && !BOILERPLATE_RE.test(t)) {
-        $candidate = $el;
-        candidateText = t;
-      }
-    });
-    if (!candidateText) return null;
-
-    // Krok 2: jesli akapit KONCZY SIE DWUKROPKIEM, to prawie na pewno
-    // zapowiada liste, ktora nastepuje zaraz po nim (np. lista linii
-    // autobusowych) - doklejamy ja, zeby nie urywac informacji w polowie.
-    if (/:\s*$/.test(candidateText)) {
-      const $listEl = $candidate.nextAll('ul, ol').first();
-      if ($listEl.length) {
-        const items = [];
-        $listEl.find('li').each((_, li) => {
-          const t = $(li).text().replace(/\s+/g, ' ').trim();
-          if (t) items.push(t);
-        });
-        if (items.length) {
-          candidateText = `${candidateText} ${items.join(', ')}`;
-        }
-      }
-    } else if (candidateText.length < 100) {
-      // Krok 3: jesli akapit jest krotki i NIE konczy sie dwukropkiem
-      // (czyli to raczej niedokonczona/uboga informacja niz zapowiedz
-      // listy), doklejamy jeszcze kolejny sensowny akapit dla kontekstu.
-      const $nextP = $candidate.nextAll('p').first();
-      if ($nextP.length) {
-        const nextText = $nextP.text().replace(/\s+/g, ' ').trim();
-        if (nextText.length > 20 && !BOILERPLATE_RE.test(nextText)) {
-          candidateText = `${candidateText} ${nextText}`;
-        }
-      }
-    }
-
-    return candidateText.slice(0, 400);
+    const text = extractArticleText($);
+    return text ? trimDescription(text) : null;
   } catch (err) {
     console.error(`[mzk] blad pobierania opisu artykulu (${url}):`, err.message);
     return null;
   }
 }
 
-// Pobiera liste artykulow z jednego adresu. Zwraca tablice artykulow -
-// pusta, jesli strona odpowiedziala, ale nic nie pasowalo (wtedy warto
-// sprobowac innego adresu).
-async function fetchListing(pageUrl) {
-  const { status, html } = await pobierzStrone(pageUrl);
-  const $ = cheerio.load(html);
-  const base = new URL(pageUrl).origin;
-  const seen = new Set();
-  const articles = [];
+async function fetchMzk() {
+  const results = [];
+  try {
+    const res = await fetch(PAGE_URL, { headers: HEADERS });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const base = new URL(PAGE_URL).origin;
+    const seen = new Set();
+    const articles = [];
 
-  $('a[href*="/aktualnosci/"]').each((_, el) => {
+    $('a[href*="/aktualnosci/"]').each((_, el) => {
       const $a = $(el);
       let href = $a.attr('href') || '';
       if (!/-i\d+\/?$/.test(href)) return;
@@ -267,52 +143,8 @@ async function fetchListing(pageUrl) {
         if (!isNaN(d.getTime())) publishedAt = d.toISOString();
       }
 
-    articles.push({ href, title, publishedAt });
-  });
-
-  // Diagnostyka: gdy strona odpowiedziala, ale nie znalezlismy ani jednego
-  // artykulu, zapisujemy w logach poczatek otrzymanej tresci. Dzieki temu
-  // od razu widac, czy dostalismy prawdziwa strone, czy np. komunikat
-  // zabezpieczenia - zamiast zgadywac przyczyne.
-  if (!articles.length) {
-    const preview = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
-    console.warn(`[mzk] ${pageUrl}: 0 artykulow (HTTP ${status}, ${html.length} znakow). Poczatek tresci: "${preview}"`);
-  }
-  return articles;
-}
-
-async function fetchMzk() {
-  const results = [];
-
-  // Przerwa po wykryciu blokady polaczenia - zeby nie marnowac ~50 sekund
-  // kazdego cyklu na czekanie na wygasniecie limitow czasu.
-  // WAZNE: przerwa dotyczy TYLKO polaczenia bezposredniego. Jesli jest
-  // ustawiony serwer posredniczacy (MZK_PROXY_URL), pobieramy przez niego
-  // normalnie w kazdym cyklu - on laczy sie inna droga, wiec blokada
-  // naszego adresu IP go nie dotyczy.
-  if (!process.env.MZK_PROXY_URL && Date.now() < przerwaDo) {
-    const zaIle = Math.ceil((przerwaDo - Date.now()) / 60000);
-    console.warn(`[mzk] pomijam probe - polaczenie bylo blokowane, kolejna proba za ok. ${zaIle} min`);
-    return results;
-  }
-
-  try {
-    let articles = [];
-    for (const pageUrl of PAGE_URLS) {
-      try {
-        articles = await fetchListing(pageUrl);
-        if (articles.length) break; // udalo sie - nie probujemy kolejnego adresu
-      } catch (err) {
-        console.warn(`[mzk] ${err.message}`);
-        // Blokada polaczenia dotyczy calego serwera, wiec proba kolejnego
-        // adresu na tym samym serwerze nie ma sensu - tylko wydluzylaby cykl.
-        if (toBladPolaczenia(err.message)) break;
-      }
-    }
-    if (!articles.length) {
-      console.error('[mzk] zaden z adresow nie zwrocil artykulow - sprawdz logi powyzej');
-      return results;
-    }
+      articles.push({ href, title, publishedAt });
+    });
 
     const limited = articles.slice(0, 15);
     const descriptions = await Promise.all(
@@ -321,12 +153,7 @@ async function fetchMzk() {
 
     limited.forEach((a, i) => {
       const description = descriptions[i] || a.title;
-      // Wyciagamy konkretna date wydarzenia (np. "31 sierpnia") z opisu,
-      // a jak jej tam nie ma - probujemy z tytulu. Dzieki temu appka moze
-      // pokazac te sama zolta plakietke "Dzisiaj/Jutro/za X dni" co juz
-      // dziala dla kategorii Prad (Enea).
-      const eventDate = extractPolishDate(description) || extractPolishDate(a.title);
-      const checked = qualityCheck({
+      results.push({
         source_url: a.href,
         source_name: 'MZK Zielona Gora',
         category: 'mzk',
@@ -334,12 +161,7 @@ async function fetchMzk() {
         street: extractStreet(description) || extractStreet(a.title),
         description,
         published_at: a.publishedAt,
-        event_date: eventDate ? eventDate.toISOString() : null,
       });
-      if (checked.needs_review) {
-        console.warn(`[mzk] wpis oznaczony do przejrzenia (${a.href}):`, checked.review_reasons.join('; '));
-      }
-      results.push(checked);
     });
   } catch (err) {
     console.error('[mzk] blad pobierania:', err.message);

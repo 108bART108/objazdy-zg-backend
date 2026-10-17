@@ -110,7 +110,62 @@ function scanItem(item) {
     problems.push('opis jest identyczny z tytulem');
   }
 
+  problems.push(...scanTruncatedStart(description));
+
   return problems;
+}
+
+// Wykrywa opis, ktory zaczyna sie w polowie mysli - czyli scraper zgubil
+// poczatek tresci. Dokladnie taki blad przeszedl przez wszystkie filtry w
+// komunikacie MZK o ul. Zacisze: opis zaczynal sie od slow "w zwiazku z
+// powyzszym nastapia zmiany", chociaz zadnego "powyzszego" w appce nie bylo.
+// Tresc byla poprawna jezykowo, wiec zaden dotychczasowy filtr nie mial
+// podstaw, zeby ja zakwestionowac - a dla czytelnika byla bez sensu.
+//
+// Dwa sygnaly, oba o wysokiej pewnosci:
+//  1. Opis zaczyna sie mala litera. W polskim komunikacie zdanie zaczyna sie
+//     wielka litera, wiec mala oznacza uciety poczatek. Wyjatkiem sa nazwy
+//     typu "ul." i "al." oraz skroty, ktore dopuszczamy.
+//  2. Opis otwiera sie odwolaniem do czegos, czego czytelnik nie widzial
+//     ("w zwiazku z powyzszym", "zgodnie z powyzszym", "jak wyzej").
+const LOWERCASE_START_OK = /^(ul\.|al\.|pl\.|os\.|dr\.|nr\.?\s|im\.|godz\.|tzw\.|ok\.|ww\.|np\.)/i;
+const DANGLING_REFERENCE_RE = /\b(powy[zż]sz\w*|wy[zż]ej\s+wymienion\w*|jak\s+wy[zż]ej|wspomnian\w*\s+wy[zż]ej)\b/i;
+
+function scanTruncatedStart(description) {
+  if (!description) return [];
+  const problems = [];
+  const head = description.slice(0, 60);
+
+  if (/^[a-ząćęłńóśźż]/.test(description) && !LOWERCASE_START_OK.test(description)) {
+    problems.push(`opis zaczyna sie mala litera - prawdopodobnie uciety poczatek ("${head.slice(0, 40)}...")`);
+  }
+
+  // Odwolanie wstecz w pierwszym zdaniu znaczy, ze brakuje tego, do czego
+  // opis sie odwoluje. Dalej w tekscie jest w porzadku - tam "powyzszym"
+  // odnosi sie do fragmentu, ktory czytelnik juz przeczytal.
+  if (DANGLING_REFERENCE_RE.test(head)) {
+    problems.push(`opis zaczyna sie od odwolania do brakujacego fragmentu ("${head.slice(0, 40)}...")`);
+  }
+
+  return problems;
+}
+
+// Limit dlugosci opisu. Komunikaty MZK zawieraja wstep plus liste zmian dla
+// kilku linii naraz i potrafia miec ~600 znakow - przy dawnym limicie 400
+// gubily koncowke, czyli najczesciej ostatnia linie autobusowa. Appka i tak
+// zwija dlugie opisy do trzech linijek z przyciskiem "pokaz wiecej", wiec
+// dluzszy opis nic nie psuje, a nie gubi informacji.
+const DESCRIPTION_LIMIT = 600;
+
+// Przycina na granicy zdania albo punktu listy, nigdy w polowie slowa.
+// Twarde slice() zostawialo urwane wyrazy w rodzaju "bedzie kursow".
+function trimToSentence(text, limit) {
+  if (!text || text.length <= limit) return text || '';
+  const cut = text.slice(0, limit);
+  const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('; '));
+  if (lastStop > limit * 0.5) return cut.slice(0, lastStop + 1).trim();
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${cut.slice(0, lastSpace > 0 ? lastSpace : limit).trim()}...`;
 }
 
 /**
@@ -125,7 +180,7 @@ function sanitizeItems(rawItems) {
     const item = {
       ...raw,
       title: cleanText(raw.title).slice(0, 300),
-      description: cleanText(raw.description).slice(0, 400),
+      description: trimToSentence(cleanText(raw.description), DESCRIPTION_LIMIT),
     };
 
     const problems = scanItem(item);
