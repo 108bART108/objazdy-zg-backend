@@ -7,10 +7,10 @@ const cron = require('node-cron');
 const {
   listUtrudnienia, db, saveSubscription, deleteSubscription,
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
-  getRandomFact,
+  listHealthReports, listSourceHealth,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
-const { getTodayFact, ensureTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
+const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
 const { notifySubscribers } = require('./push');
 const { runWeeklyHealthCheck } = require('./healthcheck');
 const { runDailyAdCheck } = require('./adReminders');
@@ -66,16 +66,6 @@ app.get('/api/ciekawostka', async (_req, res) => {
   }
 });
 
-// Losowa ciekawostka z archiwum - uzywana przez przycisk "Zobacz starsze
-// ciekawostki", gdy dzisiejsza jeszcze nie jest gotowa. Czyta tylko z bazy,
-// nie wola API, wiec nic nie kosztuje i odpowiada natychmiast.
-app.get('/api/ciekawostka/losowa', (req, res) => {
-  const exclude = typeof req.query.pomin === 'string' ? req.query.pomin : '';
-  const fact = getRandomFact(exclude);
-  if (!fact) return res.json({ date: null, content: null });
-  res.json({ date: fact.fact_date, content: fact.content });
-});
-
 // Wymusza usuniecie dzisiejszej ciekawostki i wygenerowanie nowej -
 // przydatne, gdy dzisiejsza wersja okaze sie wadliwa.
 app.post('/api/admin/ciekawostka/regenerate', async (req, res) => {
@@ -88,98 +78,6 @@ app.post('/api/admin/ciekawostka/regenerate', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// Wygodna wersja powyzszego do klikniecia z przegladarki lub telefonu -
-// bez terminala i bez narzedzi developerskich. Adres z kluczem w srodku
-// mozna zapisac w zakladkach. Klucz jest osobny od ADMIN_KEY (ADMIN_URL_KEY),
-// bo adresy laduja w historii przegladarki i w logach serwera, wiec nie
-// chcemy tam glownego klucza administracyjnego. Bez ADMIN_URL_KEY funkcja
-// jest po prostu wylaczona.
-// Generowanie trwa od 30 sekund do dwoch minut (szukanie faktu, weryfikacja,
-// korekta, kontrola slownikiem, w razie potrzeby trzy podejscia). Przegladarka
-// tyle nie czeka, dlatego praca idzie w tle, a strona odpowiada natychmiast
-// i sama sie odswieza, az bedzie wynik.
-let regen = { running: false, error: null, result: null, finishedAt: 0 };
-
-// Wynik pokazujemy tylko przez 10 minut. Pozniejsze wejscie na ten sam adres
-// oznacza, ze chcesz nowa ciekawostke, a nie podglad poprzedniej.
-const REGEN_RESULT_TTL_MS = 10 * 60 * 1000;
-
-function startRegen() {
-  if (regen.running) return;
-  regen = { running: true, error: null, result: null, finishedAt: 0 };
-  forceRegenerateTodayFact()
-    .then((fact) => { regen.result = fact.content; })
-    .catch((err) => {
-      console.error('[ciekawostka] blad regeneracji z linku:', err.message);
-      regen.error = err.message;
-    })
-    .finally(() => {
-      regen.running = false;
-      regen.finishedAt = Date.now();
-    });
-}
-
-app.get('/admin/nowa-ciekawostka', (req, res) => {
-  const urlKey = process.env.ADMIN_URL_KEY;
-  if (!urlKey) {
-    return res.status(503).send(adminPage('Funkcja wylaczona', 'Nie ustawiono zmiennej ADMIN_URL_KEY w panelu Render.', 'error'));
-  }
-  if (req.query.klucz !== urlKey) {
-    return res.status(403).send(adminPage('Brak dostepu', 'Nieprawidlowy klucz w adresie.', 'error'));
-  }
-
-  const self = `/admin/nowa-ciekawostka?klucz=${encodeURIComponent(urlKey)}`;
-
-  if (regen.running) {
-    return res.send(adminPage('Generuje nowa ciekawostke...',
-      'Szukam faktu, sprawdzam zrodla i kontroluje polszczyzne. To potrwa do dwoch minut - ta strona odswiezy sie sama.',
-      'working', self));
-  }
-
-  const stale = Date.now() - regen.finishedAt > REGEN_RESULT_TTL_MS;
-  if (req.query.ponow === '1' || stale || (!regen.result && !regen.error)) {
-    startRegen();
-    return res.send(adminPage('Generuje nowa ciekawostke...',
-      'Szukam faktu, sprawdzam zrodla i kontroluje polszczyzne. To potrwa do dwoch minut - ta strona odswiezy sie sama.',
-      'working', self));
-  }
-
-  if (regen.error) {
-    return res.send(adminPage('Nie udalo sie', regen.error, 'error', `${self}&ponow=1`));
-  }
-
-  return res.send(adminPage('Gotowe - nowa ciekawostka', regen.result, 'ok', `${self}&ponow=1`));
-});
-
-// state: 'ok' | 'error' | 'working'. Przy 'working' strona odswieza sie sama.
-function adminPage(heading, body, state, link) {
-  const color = state === 'ok' ? '#15803d' : state === 'error' ? '#b91c1c' : '#1d4ed8';
-  const esc = (s) => String(s == null ? '' : s)
-    .replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
-  const refresh = state === 'working' && link
-    ? `<meta http-equiv="refresh" content="8;url=${esc(link)}">`
-    : '';
-  const button = state === 'working'
-    ? ''
-    : (link ? `<a href="${esc(link)}">Wygeneruj jeszcze raz</a>` : '');
-  return `<!doctype html><html lang="pl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">${refresh}
-<title>Ciekawostka - Utrudnienia ZG</title>
-<style>
-body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;padding:24px;
-background:#f8fafc;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center}
-.card{background:#fff;border-radius:14px;padding:28px;max-width:520px;width:100%;
-box-shadow:0 1px 3px rgba(0,0,0,.1),0 8px 24px rgba(0,0,0,.06)}
-h1{margin:0 0 14px;font-size:1.2rem;color:${color}}
-p{margin:0 0 20px;line-height:1.6;font-size:1rem}
-a{display:inline-block;padding:11px 18px;background:#0f172a;color:#fff;
-text-decoration:none;border-radius:8px;font-size:.9rem}
-</style></head><body><div class="card">
-<h1>${esc(heading)}</h1><p>${esc(body)}</p>
-${button}
-</div></body></html>`;
-}
 
 app.get('/api/push/vapid-public-key', (_req, res) => {
   if (!process.env.VAPID_PUBLIC_KEY) {
@@ -281,6 +179,19 @@ app.post('/api/admin/healthcheck', async (req, res) => {
   }
 });
 
+// Stan zrodel danych - kiedy kazde z nich ostatnio cokolwiek zwrocilo.
+app.get('/api/admin/source-health', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  res.json({ items: listSourceHealth() });
+});
+
+// Historia cotygodniowych raportow zdrowia appki - do wyswietlenia w
+// panelu admina, zamiast grzebania w logach Render.
+app.get('/api/admin/health-reports', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  res.json({ items: listHealthReports() });
+});
+
 // Recznie wywolane sprawdzenie wygasajacych/wygaslych reklam (do testow)
 app.post('/api/admin/ads-check', async (req, res) => {
   if (!checkAdmin(req, res)) return;
@@ -292,11 +203,33 @@ app.post('/api/admin/ads-check', async (req, res) => {
   }
 });
 
+// Codzienne przygotowanie ciekawostki Z WYPRZEDZENIEM, wczesnym rankiem
+// (5:30 czasu polskiego) - zanim ktokolwiek otworzy appke. getTodayFact()
+// samo sprawdza cache (tabela daily_fact) i generuje nowa tresc tylko
+// jesli jeszcze jej nie ma, wiec to bezpieczne w wywolaniu takze wtedy,
+// gdyby z jakiegos powodu ciekawostka na dzis juz istniala. Dzieki temu
+// pierwszy uzytkownik dnia, ktory otworzy zakladke Ciekawostka, dostaje
+// juz gotowa, zapisana w bazie tresc - dokladnie tak szybko jak pozostale
+// kategorie - zamiast czekac na dwuetapowe (generowanie + recenzja)
+// zapytanie do Claude z wyszukiwaniem w internecie na zywo.
+cron.schedule('30 5 * * *', () => {
+  console.log('[cron] przygotowuje dzisiejsza ciekawostke z wyprzedzeniem...');
+  getTodayFact({ wait: true }).catch((err) => console.error('[cron] blad przygotowania ciekawostki:', err.message));
+}, { timezone: 'Europe/Warsaw' });
+
 app.listen(PORT, () => {
   console.log(`Objazdy ZG API dziala na porcie ${PORT}`);
 });
 
-cron.schedule('*/30 * * * *', () => {
+// Scrapowanie co 10 minut zamiast co 30 - zrodla sa sprawdzane znacznie
+// czesciej, wiec nowy komunikat (np. objazd na Wszystkich Swietych) trafia
+// do appki w ciagu kilkunastu minut, a nie po godzinie.
+//
+// KOSZT: zero. Scrapowanie to zwykle pobranie stron HTTP z serwera, ktory
+// i tak dziala 24/7 w stalej cenie - nie ma tu zadnego platnego API.
+// Jedyne platne wywolania (Anthropic) dotycza ciekawostki i maja wlasny
+// twardy limit 3 na dobe, calkowicie niezalezny od tego harmonogramu.
+cron.schedule('*/10 * * * *', () => {
   console.log('[cron] uruchamiam scrapeAll...');
   scrapeAll().catch((err) => console.error('[cron] blad:', err));
 });
@@ -307,21 +240,6 @@ cron.schedule('30 15 * * 0', () => {
   runWeeklyHealthCheck().catch((err) => console.error('[cron] blad przegladu:', err));
 }, { timezone: 'Europe/Warsaw' });
 
-// Dzienna ciekawostka. Pierwsze podejscie o 5:20 rano, zeby byla gotowa,
-// zanim ktokolwiek otworzy appke. Potem co godzine az do 22:00 - ale
-// ensureTodayFact nie robi nic, jesli ciekawostka na dzis juz jest, wiec
-// te kolejne uruchomienia to tylko samonaprawa na wypadek, gdyby poranne
-// generowanie odpadlo na kontroli jezykowej albo API bylo chwilowo
-// niedostepne. Dzieki temu dzien bez ciekawostki praktycznie sie nie zdarza,
-// a appka nigdy nie publikuje tekstu, ktory nie przeszedl kontroli.
-cron.schedule('20 5-22 * * *', () => {
-  ensureTodayFact()
-    .then((fact) => {
-      if (fact.generated) console.log('[cron] wygenerowano ciekawostke na dzis');
-    })
-    .catch((err) => console.error('[cron] blad ciekawostki:', err.message));
-}, { timezone: 'Europe/Warsaw' });
-
 // Codzienne sprawdzenie reklam (wygasle -> wylacz, wygasajace za <=7 dni -> przypomnienie)
 // - codziennie o 8:00 czasu polskiego
 cron.schedule('0 8 * * *', () => {
@@ -330,12 +248,4 @@ cron.schedule('0 8 * * *', () => {
 }, { timezone: 'Europe/Warsaw' });
 
 scrapeAll().catch((err) => console.error('[start] blad pierwszego scrapowania:', err));
-
-// Przy starcie serwera tez sprawdzamy, czy ciekawostka na dzis istnieje.
-// Render restartuje usluge przy kazdym deployu, wiec bez tego ciekawostka
-// po wdrozeniu w ciagu dnia czekalaby do najblizszej pelnej godziny.
-ensureTodayFact()
-  .then((fact) => {
-    if (fact.generated) console.log('[start] wygenerowano ciekawostke na dzis');
-  })
-  .catch((err) => console.error('[start] blad ciekawostki:', err.message));
+getTodayFact({ wait: true }).catch((err) => console.error('[start] blad przygotowania ciekawostki:', err.message));
