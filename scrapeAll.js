@@ -55,12 +55,54 @@ function dedupeByContent(items) {
 // (np. scraper nie zdolal go wyciagnac) traktujemy jako "swiezy" -
 // bezpieczniejsze zalozenie niz milczec o czyms co moze byc wazne.
 const PUSH_FRESHNESS_DAYS = 3;
+
+// Maksymalna liczba powiadomien na jeden cykl scrapowania. Zabezpieczenie
+// przed zalewem: gdy zepsute zrodlo (np. MZK zablokowane po IP) zaczyna
+// znow dzialac, scraper widzi naraz kilkanascie "nowych" wpisow. Bez tego
+// limitu uzytkownik dostalby kilkanascie powiadomien w jednej minucie i
+// najpewniej wylaczylby je na stale. Nadwyzka jest widoczna w appce od
+// razu - tylko bez osobnego dzwieku dla kazdego wpisu.
+const PUSH_MAX_PER_CYCLE = 5;
+
+function parseDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Czy wpis zasluguje na powiadomienie.
+//
+// Sama data publikacji to zly jedyny wyznacznik, co pokazala awaria MZK:
+// po jej naprawie do appki trafily komunikaty opublikowane kilka-kilkanascie
+// dni wczesniej, ale dotyczace zmian w trasach jeszcze PRZED nami. W appce
+// byly widoczne, a push sie nie wysylal - czytelnicy nie dowiedzieli sie o
+// zmianach, ktore ich dopiero czekaly. To bylo odwrotnie niz powinno.
+//
+// Dlatego powiadamiamy, gdy wpis jest swiezo opublikowany ALBO gdy dotyczy
+// wydarzenia, ktore trwa lub jeszcze sie nie zaczelo - bo wlasnie wtedy
+// informacja ma dla czytelnika realna wartosc. Odsiewamy natomiast wpisy
+// stare I dotyczace zamknietej juz przeszlosci.
+//
+// Brak jakiejkolwiek daty traktujemy jako "warte powiadomienia" -
+// bezpieczniej powiedziec o czyms moze waznym niz przemilczec.
 function isRecentEnoughForPush(item) {
-  if (!item.published_at) return true;
-  const publishedAt = new Date(item.published_at);
-  if (isNaN(publishedAt.getTime())) return true;
+  const publishedAt = parseDate(item.published_at);
+  if (!publishedAt) return true;
+
   const ageMs = Date.now() - publishedAt.getTime();
-  return ageMs <= PUSH_FRESHNESS_DAYS * 86400000;
+  if (ageMs <= PUSH_FRESHNESS_DAYS * 86400000) return true;
+
+  // Starszy wpis, ale wydarzenie dopiero bedzie albo wlasnie trwa.
+  // Porownujemy do POCZATKU dzisiejszego dnia, zeby utrudnienie
+  // obowiazujace wlasnie dzisiaj nadal sie liczylo.
+  const eventDate = parseDate(item.event_date);
+  if (eventDate) {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    if (eventDate.getTime() >= startOfToday.getTime()) return true;
+  }
+
+  return false;
 }
 
 // Ile cykli z rzedu zrodlo moze nie zwrocic ANI JEDNEGO wpisu, zanim
@@ -164,7 +206,7 @@ async function scrapeAll() {
   // zeby nie wysylac mylacych powiadomien o czyms, co i tak wyladuje na
   // dole listy posortowanej po dacie.
   const staleSkipped = [];
-  const newItemsToNotify = newItems.filter((i) => {
+  let newItemsToNotify = newItems.filter((i) => {
     if (i.needs_review) return false;
     if (!isRecentEnoughForPush(i)) {
       staleSkipped.push(i);
@@ -174,9 +216,20 @@ async function scrapeAll() {
   });
   if (staleSkipped.length) {
     for (const item of staleSkipped) {
-      console.log(`[scrapeAll] pominieto push dla "nowego" ale nieswiezego wpisu [${item.category}] "${item.title}" (published_at: ${item.published_at})`);
+      console.log(`[scrapeAll] pominieto push: wpis stary i wydarzenie juz minelo [${item.category}] "${item.title}" (publikacja: ${item.published_at}, wydarzenie: ${item.event_date || 'brak'})`);
     }
   }
+
+  // Przy nadwyzce powiadamiamy o najnowszych - one najpewniej dotycza
+  // tego, co uzytkownika czeka. Reszta i tak jest widoczna w appce.
+  if (newItemsToNotify.length > PUSH_MAX_PER_CYCLE) {
+    const nadwyzka = newItemsToNotify.length - PUSH_MAX_PER_CYCLE;
+    newItemsToNotify = [...newItemsToNotify]
+      .sort((a, b) => new Date(b.published_at || 0) - new Date(a.published_at || 0))
+      .slice(0, PUSH_MAX_PER_CYCLE);
+    console.log(`[scrapeAll] limit powiadomien: wysylam ${PUSH_MAX_PER_CYCLE} najnowszych, ${nadwyzka} wpisow bez push (sa widoczne w appce)`);
+  }
+
   if (newItemsToNotify.length) {
     notifySubscribers(newItemsToNotify).catch((err) => console.error('[push] blad wysylki powiadomien:', err.message));
   }

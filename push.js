@@ -1,7 +1,15 @@
 const webpush = require('web-push');
 const { getAllSubscriptions, deleteSubscription } = require('./db');
 
-const APP_URL = 'https://objazdy-zg-frontend.onrender.com';
+// Adres, ktory otwiera sie po klknieciu w powiadomienie. MUSI byc tym
+// samym adresem, pod ktorym dziala appka zainstalowana z Google Play -
+// inaczej klikniecie otwiera przegladarke zamiast appki, bo system widzi
+// inna domene niz ta z assetlinks.json.
+const APP_URL = process.env.APP_URL || 'https://utrudnienia-zg.pl';
+
+// Adres kontaktowy wymagany przez dostawcow push (Google, Apple) - trafia
+// do nich w naglowku, zeby mieli sie z kim skontaktowac przy problemach.
+const VAPID_CONTACT = process.env.VAPID_CONTACT || 'mailto:info@utrudnienia-zg.pl';
 
 const CATEGORY_LABELS = {
   drogi: 'Drogi',
@@ -15,7 +23,7 @@ function ensureConfigured() {
   if (configured) return true;
   const { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY } = process.env;
   if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return false;
-  webpush.setVapidDetails('mailto:kontakt@twoja-domena.pl', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  webpush.setVapidDetails(VAPID_CONTACT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
   configured = true;
   return true;
 }
@@ -41,12 +49,19 @@ async function notifySubscribers(newItems) {
   if (!subs.length) return;
 
   let sent = 0;
+  let pominietePrzezKategorie = 0;
   for (const sub of subs) {
     const prefCategories = sub.categories ? sub.categories.split(',').filter(Boolean) : [];
     const matched = newItems.filter(
       (i) => prefCategories.length === 0 || prefCategories.includes(i.category)
     );
-    if (!matched.length) continue;
+    if (!matched.length) {
+      // Subskrybent nie wybral kategorii, ktorej dotyczy ten wpis - to
+      // normalne, ale warto wiedziec, ilu osob to dotyczy. Bez tego
+      // "wyslano 2/12" wyglada jak awaria, a jest poprawnym dzialaniem.
+      pominietePrzezKategorie++;
+      continue;
+    }
 
     const first = matched[0];
     // Etykieta kategorii w tytule powiadomienia - jesli wszystkie pasujace
@@ -82,7 +97,65 @@ async function notifySubscribers(newItems) {
       }
     }
   }
-  console.log(`[push] wyslano ${sent}/${subs.length} powiadomien`);
+  const opisPominietych = pominietePrzezKategorie
+    ? `, pominieto ${pominietePrzezKategorie} (inne wybrane kategorie)`
+    : '';
+  console.log(`[push] wyslano ${sent}/${subs.length} powiadomien${opisPominietych}`);
 }
 
-module.exports = { notifySubscribers };
+// Testowe powiadomienie do WSZYSTKICH zapisanych urzadzen, z pominieciem
+// filtra kategorii. To wazne: zwykla wysylka omija osoby, ktore nie
+// wybraly danej kategorii, wiec test oparty na notifySubscribers moglby
+// falszywie sugerowac awarie u kogos, kto po prostu nie subskrybuje
+// kategorii uzytej w tescie.
+// Zwraca raport per urzadzenie - bez pelnych adresow (to identyfikatory
+// konkretnych urzadzen), tylko dostawca i koncowka.
+async function sendTestNotification() {
+  if (!ensureConfigured()) {
+    throw new Error('brak kluczy VAPID w zmiennych srodowiskowych');
+  }
+  const subs = getAllSubscriptions();
+  const payload = JSON.stringify({
+    title: 'Test powiadomień',
+    body: 'Jeśli to widzisz, powiadomienia działają poprawnie.',
+    url: APP_URL,
+  });
+
+  const wyniki = [];
+  for (const sub of subs) {
+    let dostawca = 'nieznany';
+    try {
+      const host = new URL(sub.endpoint).hostname;
+      if (host.includes('fcm.googleapis') || host.includes('android')) dostawca = 'Android / Chrome';
+      else if (host.includes('push.apple')) dostawca = 'Apple (iPhone)';
+      else if (host.includes('mozilla')) dostawca = 'Firefox';
+      else dostawca = host;
+    } catch { /* zostawiamy "nieznany" */ }
+
+    const wpis = {
+      dostawca,
+      id: sub.endpoint.slice(-8),
+      kategorie: sub.categories || '(wszystkie)',
+    };
+    try {
+      await webpush.sendNotification(JSON.parse(sub.subscription_json), payload);
+      wpis.ok = true;
+    } catch (err) {
+      wpis.ok = false;
+      wpis.blad = err.statusCode ? `HTTP ${err.statusCode}` : err.message;
+      // 404/410 = subskrypcja wygasla po stronie dostawcy (np. ktos
+      // odinstalowal appke). Usuwamy ja, zeby nie zasmiecala statystyk.
+      if (err.statusCode === 404 || err.statusCode === 410) {
+        deleteSubscription(sub.endpoint);
+        wpis.blad += ' - subskrypcja wygasla, usunieto';
+      }
+    }
+    wyniki.push(wpis);
+  }
+
+  const udane = wyniki.filter((w) => w.ok).length;
+  console.log(`[push] test: dostarczono do ${udane}/${wyniki.length} urzadzen`);
+  return { wyslano: udane, wszystkich: wyniki.length, szczegoly: wyniki };
+}
+
+module.exports = { notifySubscribers, sendTestNotification };

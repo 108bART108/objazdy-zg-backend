@@ -7,11 +7,11 @@ const cron = require('node-cron');
 const {
   listUtrudnienia, db, saveSubscription, deleteSubscription,
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
-  listHealthReports, listSourceHealth,
+  listHealthReports, listSourceHealth, listSubscriptionSummary,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
-const { notifySubscribers } = require('./push');
+const { notifySubscribers, sendTestNotification } = require('./push');
 const { runWeeklyHealthCheck } = require('./healthcheck');
 const { runDailyAdCheck } = require('./adReminders');
 
@@ -153,17 +153,20 @@ app.post('/api/admin/refresh', async (req, res) => {
   }
 });
 
+// Test powiadomien do WSZYSTKICH zapisanych urzadzen.
+//
+// WAZNE: wcześniej ten test udawal nowy wpis w kategorii "drogi" i szedl
+// przez zwykla wysylke, ktora filtruje po kategoriach. Skutek byl mylacy:
+// osoba zapisana tylko na np. MZK NIE DOSTAWALA testu, co wygladalo na
+// awarie powiadomien, choc one dzialaly poprawnie. Teraz test celowo
+// omija filtr kategorii i zwraca raport per urzadzenie, zeby bylo widac,
+// ktore urzadzenie faktycznie przyjelo powiadomienie, a ktore odrzucilo
+// i z jakim bledem.
 app.post('/api/admin/test-push', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
-    await notifySubscribers([{
-      category: 'drogi',
-      street: 'Test powiadomien',
-      title: 'Test powiadomien',
-      description: 'To jest testowe powiadomienie z appki Utrudnienia ZG. Jesli to widzisz, wszystko dziala poprawnie!',
-      source_url: 'https://objazdy-zg-frontend.onrender.com',
-    }]);
-    res.json({ ok: true });
+    const raport = await sendTestNotification();
+    res.json({ ok: true, ...raport });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -177,6 +180,14 @@ app.post('/api/admin/healthcheck', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Kto jest zapisany na powiadomienia i na jakie kategorie - do diagnozy,
+// gdy ktos zglasza, ze powiadomienia nie dochodza.
+app.get('/api/admin/subscriptions', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const items = listSubscriptionSummary();
+  res.json({ count: items.length, items });
 });
 
 // Stan zrodel danych - kiedy kazde z nich ostatnio cokolwiek zwrocilo.
