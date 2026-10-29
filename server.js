@@ -16,6 +16,7 @@ const { notifySubscribers, sendTestNotification, checkPushConfig } = require('./
 const { runWeeklyHealthCheck } = require('./healthcheck');
 const { sendSystemAlert } = require('./systemAlerts');
 const { runDailyAdCheck } = require('./adReminders');
+const { runStartupCheck } = require('./startupCheck');
 
 const app = express();
 
@@ -243,6 +244,10 @@ app.listen(PORT, () => {
   // Sprawdzenie konfiguracji powiadomien zaraz po starcie - literowka w
   // adresie appki albo niewypelniony wzorzec w kontakcie VAPID sa widoczne
   // od razu w logach wdrozenia, zamiast lezec niezauwazone miesiacami.
+  // Czy wszystkie wgrane pliki sa z tej samej wersji. Niespojne wdrozenie
+  // (np. nowy scrapeAll.js przy starym db.js) potrafi zatrzymac zapisywanie
+  // nowych wpisow na wiele godzin, dajac o sobie znac tylko bledem w logach.
+  runStartupCheck();
   checkPushConfig();
 });
 
@@ -254,9 +259,40 @@ app.listen(PORT, () => {
 // i tak dziala 24/7 w stalej cenie - nie ma tu zadnego platnego API.
 // Jedyne platne wywolania (Anthropic) dotycza ciekawostki i maja wlasny
 // twardy limit 3 na dobe, calkowicie niezalezny od tego harmonogramu.
-cron.schedule('*/10 * * * *', () => {
+// Ile cykli scrapowania moze padnac z rzedu, zanim dostaniesz alert.
+// 3 cykle to ok. 30 minut - na tyle dlugo, by nie alarmowac przy
+// chwilowej awarii sieci, i na tyle krotko, by nie dowiedziec sie o
+// zatrzymanej appce po godzinach.
+const SCRAPE_FAILS_BEFORE_ALERT = 3;
+let kolejneBledyScrapowania = 0;
+let zglosonoAwarieScrapowania = false;
+
+cron.schedule('*/10 * * * *', async () => {
   console.log('[cron] uruchamiam scrapeAll...');
-  scrapeAll().catch((err) => console.error('[cron] blad:', err));
+  try {
+    await scrapeAll();
+    if (kolejneBledyScrapowania >= SCRAPE_FAILS_BEFORE_ALERT) {
+      console.log('[cron] scrapowanie znowu dziala');
+      sendSystemAlert('Scrapowanie znowu dziala', 'Appka wrocila do zapisywania nowych wpisow.')
+        .catch(() => { /* alert jest dodatkiem, nie moze przerwac pracy */ });
+    }
+    kolejneBledyScrapowania = 0;
+    zglosonoAwarieScrapowania = false;
+  } catch (err) {
+    kolejneBledyScrapowania++;
+    console.error(`[cron] blad (${kolejneBledyScrapowania}. raz z rzedu):`, err);
+
+    // Padajace scrapowanie oznacza, ze do appki NIE TRAFIAJA nowe wpisy -
+    // objaw gorszy niz brak jednego zrodla, bo dotyczy wszystkich kategorii
+    // naraz. Wczesniej jedynym sladem byl blad w logach Render.
+    if (kolejneBledyScrapowania >= SCRAPE_FAILS_BEFORE_ALERT && !zglosonoAwarieScrapowania) {
+      zglosonoAwarieScrapowania = true;
+      sendSystemAlert(
+        'Appka nie zapisuje nowych wpisow',
+        `Scrapowanie padlo ${kolejneBledyScrapowania} razy z rzedu: ${err.message}. Sprawdz logi Render.`
+      ).catch(() => { /* jw. */ });
+    }
+  }
 });
 
 // Codzienne sprawdzenie, czy powiadomienia faktycznie wychodza.
