@@ -1,4 +1,5 @@
 const cheerio = require('cheerio');
+const { getDescriptionsByUrls } = require('./db');
 const https = require('https');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
@@ -499,9 +500,42 @@ async function fetchMzk() {
     }
 
     const limited = articles.slice(0, 15);
+
+    // Opis artykulu pobieramy TYLKO wtedy, gdy jeszcze go nie mamy.
+    //
+    // Wczesniej kazdy cykl pobieral osobno wszystkie 15 artykulow - takze
+    // te sprzed miesiecy, ktorych tresc dawno jest w bazie i sie nie
+    // zmienia. Przy cyklu co 10 minut dawalo to okolo 90 zadan na godzine
+    // przez darmowego posrednika, co samo w sobie wywolywalo limity (HTTP
+    // 408 i 429) i potrafilo wydluzyc cykl do ponad minuty. Teraz w
+    // typowym cyklu nie pobieramy ani jednego artykulu - tylko te naprawde
+    // nowe.
+    //
+    // Opis rowny tytulowi to wartosc zapasowa zapisana, gdy poprzednie
+    // pobranie sie nie udalo - taki wpis probujemy pobrac jeszcze raz.
+    let znaneOpisy = new Map();
+    try {
+      znaneOpisy = getDescriptionsByUrls(limited.map((a) => a.href));
+    } catch (err) {
+      // Brak dostepu do bazy nie moze zatrzymac scrapowania - w najgorszym
+      // razie pobierzemy opisy tak jak dotad.
+      console.warn('[mzk] nie udalo sie sprawdzic znanych opisow:', err.message);
+    }
+
+    let pobrane = 0;
     const descriptions = await Promise.all(
-      limited.map((a) => fetchArticleDescription(a.href))
+      limited.map((a) => {
+        const zapisany = znaneOpisy.get(a.href);
+        if (zapisany && zapisany !== a.title && zapisany.length > a.title.length) {
+          return Promise.resolve(zapisany);
+        }
+        pobrane++;
+        return fetchArticleDescription(a.href);
+      })
     );
+    if (pobrane) {
+      console.log(`[mzk] pobieram opisy ${pobrane} z ${limited.length} artykulow (reszta juz w bazie)`);
+    }
 
     limited.forEach((a, i) => {
       const description = descriptions[i] || a.title;

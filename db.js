@@ -214,6 +214,17 @@ function upsertMany(items) {
   return { count: items.length, newItems, flaggedItems };
 }
 
+// Opisy juz zapisanych wpisow, po adresach zrodlowych. Pozwala scraperom
+// NIE pobierac po raz kolejny artykulu, ktorego tresc juz znamy.
+function getDescriptionsByUrls(urls) {
+  if (!urls || !urls.length) return new Map();
+  const placeholders = urls.map(() => '?').join(',');
+  const rows = db
+    .prepare(`SELECT source_url, description FROM utrudnienia WHERE source_url IN (${placeholders})`)
+    .all(...urls);
+  return new Map(rows.map((r) => [r.source_url, r.description]));
+}
+
 function listUtrudnienia({ category, search, limit = 50 } = {}) {
   // needs_review = 0: appka pokazuje tylko wpisy, ktore przeszly
   // automatyczne sprawdzenie jakosci (qualityCheck) bez zastrzezen.
@@ -571,6 +582,7 @@ module.exports = {
   db,
   upsertMany,
   listUtrudnienia,
+  getDescriptionsByUrls,
   getDailyFact,
   deleteDailyFact,
   saveDailyFact,
