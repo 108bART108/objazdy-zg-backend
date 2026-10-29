@@ -18,6 +18,11 @@ const PAGE_URLS = [
 // (nie zamiast), bo bywa pusta.
 const KOMUNIKATY_URL = 'https://www.mzk.zgora.pl/komunikaty';
 
+// Komunikat, ktorym strona MZK sama oznajmia pusta liste. Rozpoznajemy go,
+// zeby nie traktowac poprawnie dzialajacej, ale pustej zakladki jako bledu.
+// Kilka wariantow zapisu na wypadek drobnej zmiany tresci.
+const STRONA_PUSTA_WZORZEC = /brak\s+(komunikat|aktualno|wpis|artykul|informacj)/i;
+
 // WAZNE: nazwa przegladarki bez slowa "bot". Zabezpieczenia stron czesto
 // odrzucaja zapytania z "bot" w User-Agent, odpowiadajac pusta strona z
 // kodem 200 - czyli scraper "dziala", ale nie widzi zadnych wpisow.
@@ -104,21 +109,80 @@ function fetchPrzezHttps(url, family, timeoutMs = 15000, redirectsLeft = 2) {
 // zamiera. Dlatego probujemy kilku po kolei, a ten, ktory ostatnio
 // zadzialal, zapamietujemy i uzywamy jako pierwszego.
 // MZK_PROXY_URL (jesli ustawione) ma pierwszenstwo przed lista wbudowana.
+// Usuniete 29.10.2026 po analizie logow:
+//   thingproxy.freeboard.io - serwer nie istnieje (ENOTFOUND, znikl z DNS)
+//   corsproxy.io            - odpowiada HTTP 401, wymaga teraz klucza API
+// Oba zawodzily ZA KAZDYM RAZEM, a kazda proba kosztowala limit czasu.
+// Przy dwoch adresach na cykl marnowalo to okolo polowy z 2,5 minuty,
+// ktore zajmowalo wtedy scrapowanie.
 const PROXY_WBUDOWANE = [
   'https://api.allorigins.win/raw?url=',
   'https://api.codetabs.com/v1/proxy/?quest=',
-  'https://corsproxy.io/?url=',
-  'https://thingproxy.freeboard.io/fetch/',
 ];
+
+// Limit czasu na jednego posrednika. 20 sekund bylo ustawieniem "na wszelki
+// wypadek" - przy czterech posrednikach i dwoch adresach dawalo to w
+// najgorszym razie ponad dwie minuty czekania na z gory przegrana sprawe.
+// Strona MZK wazy ok. 37 kB, wiec sprawny posrednik oddaje ja grubo
+// ponizej 10 sekund.
+const PROXY_TIMEOUT_MS = 10000;
+
+// Jak dlugo po calkowitej porazce nie probowac posrednikow ponownie.
+// Scraper pobiera w jednym cyklu kilka adresow; bez tego kazdy z nich
+// powtarzalby cala przegrana liste od poczatku.
+const PROXY_PRZERWA_MS = 60000;
+let proxyPadlyDo = 0;
+
+// Posrednicy, ktorzy zawodza TRWALE (nie istnieja albo odmawiaja dostepu),
+// sa odstawiani automatycznie na dobe. Dzieki temu kolejny posrednik,
+// ktory zniknie albo zacznie wymagac klucza - a to sie darmowym serwisom
+// zdarza - nie bedzie spowalnial scrapowania az do recznej poprawki.
+const TRWALE_PORAZKI_PRZED_ODSTAWIENIEM = 3;
+const ODSTAWIENIE_MS = 24 * 3600 * 1000;
+const odstawieni = new Map();   // proxy -> do kiedy odstawiony
+const trwalePorazki = new Map(); // proxy -> licznik
+
+function toTrwalaPorazka(komunikat) {
+  // Serwer nie istnieje, odmawia dostepu albo zada klucza - powtarzanie
+  // proby niczego nie zmieni.
+  return /ENOTFOUND|HTTP 401|HTTP 403|HTTP 407|ERR_INVALID_URL/i.test(komunikat);
+}
+
+function zapiszPorazkeProxy(proxy, komunikat) {
+  if (!toTrwalaPorazka(komunikat)) {
+    trwalePorazki.delete(proxy);
+    return;
+  }
+  const n = (trwalePorazki.get(proxy) || 0) + 1;
+  trwalePorazki.set(proxy, n);
+  if (n >= TRWALE_PORAZKI_PRZED_ODSTAWIENIEM) {
+    odstawieni.set(proxy, Date.now() + ODSTAWIENIE_MS);
+    trwalePorazki.delete(proxy);
+    console.warn(`[mzk] odstawiam posrednika ${proxy.split('/')[2]} na dobe - zawiodl ${n} razy trwale (${komunikat})`);
+  }
+}
+
+function czyOdstawiony(proxy) {
+  const doKiedy = odstawieni.get(proxy);
+  if (!doKiedy) return false;
+  if (Date.now() >= doKiedy) {
+    // Po dobie dajemy jeszcze jedna szanse - serwis mogl wrocic.
+    odstawieni.delete(proxy);
+    return false;
+  }
+  return true;
+}
 
 function listaProxy() {
   const wlasne = (process.env.MZK_PROXY_URL || '')
     .split(',')
     .map((x) => x.trim())
     .filter(Boolean);
-  const wszystkie = [...wlasne, ...PROXY_WBUDOWANE];
+  // Wlasny posrednik z MZK_PROXY_URL nigdy nie jest odstawiany - to swiadomy
+  // wybor administratora, a nie darmowy serwis, ktory moze zniknac.
+  const wszystkie = [...wlasne, ...PROXY_WBUDOWANE.filter((p) => !czyOdstawiony(p))];
   // Posrednik, ktory ostatnio zadzialal, idzie na poczatek kolejki.
-  if (dzialajacyProxy) {
+  if (dzialajacyProxy && wszystkie.includes(dzialajacyProxy)) {
     return [dzialajacyProxy, ...wszystkie.filter((p) => p !== dzialajacyProxy)];
   }
   return wszystkie;
@@ -144,12 +208,23 @@ function wygladaJakStronaMzk(html) {
 }
 
 async function przezProxy(url) {
+  // Jesli cala lista padla przed chwila, nie powtarzamy jej dla kolejnego
+  // adresu w tym samym cyklu - to byla druga polowa zmarnowanego czasu.
+  if (Date.now() < proxyPadlyDo) {
+    throw new Error('wszyscy posrednicy zawiedli przed chwila - pomijam ponowna probe w tym cyklu');
+  }
+
   const bledy = [];
-  for (const proxy of listaProxy()) {
+  const lista = listaProxy();
+  if (!lista.length) {
+    throw new Error('brak dostepnych posrednikow (wszyscy odstawieni jako trwale niedzialajacy)');
+  }
+
+  for (const proxy of lista) {
     try {
       const res = await fetch(proxy + encodeURIComponent(url), {
         headers: HEADERS,
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
@@ -160,12 +235,17 @@ async function przezProxy(url) {
         console.log(`[mzk] dzialajacy posrednik: ${proxy}`);
         dzialajacyProxy = proxy;
       }
+      trwalePorazki.delete(proxy);
+      proxyPadlyDo = 0;
       return { status: res.status, html };
     } catch (err) {
-      bledy.push(`${proxy.split('/')[2]}: ${opisBledu(err)}`);
+      const opis = opisBledu(err);
+      bledy.push(`${proxy.split('/')[2]}: ${opis}`);
+      zapiszPorazkeProxy(proxy, opis);
       if (dzialajacyProxy === proxy) dzialajacyProxy = null;
     }
   }
+  proxyPadlyDo = Date.now() + PROXY_PRZERWA_MS;
   throw new Error(`wszystkie serwery posredniczace zawiodly - ${bledy.join(' | ')}`);
 }
 
@@ -346,13 +426,25 @@ async function fetchListing(pageUrl) {
     articles.push({ href, title, publishedAt });
   });
 
-  // Diagnostyka: gdy strona odpowiedziala, ale nie znalezlismy ani jednego
-  // artykulu, zapisujemy w logach poczatek otrzymanej tresci. Dzieki temu
-  // od razu widac, czy dostalismy prawdziwa strone, czy np. komunikat
-  // zabezpieczenia - zamiast zgadywac przyczyne.
+  // Pusta lista ma DWIE rozne przyczyny i nie wolno ich mylic:
+  //
+  //   1. Strona sama informuje, ze nic nie ma ("Aktualnie brak komunikatow")
+  //      - to normalny, poprawny stan. Zakladka Komunikaty MZK bywa pusta
+  //        tygodniami i nie ma w tym nic niepokojacego.
+  //   2. Strona cos zawiera, ale nic z niej nie wyciagnelismy - to dopiero
+  //      jest podejrzane (zmiana ukladu strony, blokada, zly selektor).
+  //
+  // Wczesniej oba przypadki trafialy do logow jako ostrzezenie z podgladem
+  // tresci, przez co pusta - czyli poprawnie dzialajaca - zakladka
+  // wygladala na awarie przy kazdym cyklu. Alarm, ktory wlacza sie bez
+  // powodu, przestaje cokolwiek znaczyc.
   if (!articles.length) {
-    const preview = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
-    console.warn(`[mzk] ${pageUrl}: 0 artykulow (HTTP ${status}, ${html.length} znakow). Poczatek tresci: "${preview}"`);
+    const tekst = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (STRONA_PUSTA_WZORZEC.test(tekst)) {
+      console.log(`[mzk] ${pageUrl}: brak wpisow - strona sama informuje, ze nic nie ma (stan normalny)`);
+    } else {
+      console.warn(`[mzk] ${pageUrl}: 0 artykulow mimo tresci na stronie (HTTP ${status}, ${html.length} znakow). Poczatek tresci: "${tekst.slice(0, 200)}"`);
+    }
   }
   return articles;
 }
