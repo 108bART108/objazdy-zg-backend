@@ -1,7 +1,5 @@
 const cheerio = require('cheerio');
 const { detectCategory, extractStreet } = require('./classify');
-const { qualityCheck } = require('./qualityCheck');
-const { extractPolishDate } = require('./polishDates');
 
 // Generyczny mechanizm - obecnie bez zadnego zrodla. ZDW i MZK maja teraz
 // wlasne, dedykowane scrapery (zdw.js, mzk.js) dopasowane do ich
@@ -14,7 +12,7 @@ async function fetchOne(source) {
   const results = [];
   try {
     const res = await fetch(source.url, {
-      headers: { 'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)' },
+      headers: { 'User-Agent': 'UtrudnieniaZG-bot/1.0 (+info@utrudnienia-zg.pl)' },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
@@ -40,9 +38,8 @@ async function fetchOne(source) {
       if (!description) return;
 
       const text = `${title} ${description}`;
-      const eventDate = extractPolishDate(description) || extractPolishDate(title);
 
-      const checked = qualityCheck({
+      results.push({
         source_url: link,
         source_name: source.name,
         category: detectCategory(text) || source.defaultCategory,
@@ -50,12 +47,7 @@ async function fetchOne(source) {
         street: extractStreet(title),
         description,
         published_at: new Date().toISOString(),
-        event_date: eventDate ? eventDate.toISOString() : null,
       });
-      if (checked.needs_review) {
-        console.warn(`[htmlSources] wpis oznaczony do przejrzenia (${link}):`, checked.review_reasons.join('; '));
-      }
-      results.push(checked);
     });
   } catch (err) {
     console.error(`[htmlSources] blad pobierania ${source.name} (${source.url}):`, err.message);

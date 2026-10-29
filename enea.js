@@ -26,7 +26,7 @@ async function fetchEnea() {
   const results = [];
   try {
     const res = await fetch(URL, {
-      headers: { 'User-Agent': 'ObjazdyZG-bot/1.0 (+kontakt@twoja-domena.pl)' },
+      headers: { 'User-Agent': 'UtrudnieniaZG-bot/1.0 (+info@utrudnienia-zg.pl)' },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();

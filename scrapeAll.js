@@ -4,7 +4,7 @@ const { fetchEnea } = require('./enea');
 const { fetchMzk } = require('./mzk');
 const { fetchZwik } = require('./zwik');
 const { fetchZdw } = require('./zdw');
-const { upsertMany, recordSourceResult, markSourceAlerted } = require('./db');
+const { upsertMany, recordSourceResult, markSourceAlerted, recordPushAttempt } = require('./db');
 const { sendSystemAlert } = require('./systemAlerts');
 const { notifySubscribers } = require('./push');
 const { qualityCheck } = require('./qualityCheck');
@@ -230,8 +230,39 @@ async function scrapeAll() {
     console.log(`[scrapeAll] limit powiadomien: wysylam ${PUSH_MAX_PER_CYCLE} najnowszych, ${nadwyzka} wpisow bez push (sa widoczne w appce)`);
   }
 
-  if (newItemsToNotify.length) {
-    notifySubscribers(newItemsToNotify).catch((err) => console.error('[push] blad wysylki powiadomien:', err.message));
+  // Kazdy cykl, w ktorym pojawily sie nowe wpisy, zostawia slad w
+  // dzienniku - TAKZE gdy nie wyszlo ani jedno powiadomienie. Wlasnie ten
+  // przypadek byl wczesniej niewidoczny: wpisy wchodzily do appki, push
+  // byl po cichu odfiltrowywany, i nie bylo zadnego zapisu, z ktorego
+  // dalo by sie to zauwazyc. Teraz checkPushSilence() ma na czym pracowac.
+  if (newItems.length) {
+    const zapiszDziennik = (wynik) => {
+      try {
+        recordPushAttempt({
+          kandydatow: newItemsToNotify.length,
+          dostarczono: wynik.dostarczono || 0,
+          bledow: wynik.bledow || 0,
+          pominietoStare: staleSkipped.length,
+          pominietoKategorie: wynik.pominietoKategorie || 0,
+          szczegoly: wynik.powod || null,
+        });
+      } catch (err) {
+        // Dziennik jest narzedziem diagnostycznym - jego awaria nie moze
+        // przerwac scrapowania ani wysylki powiadomien.
+        console.error('[push] nie udalo sie zapisac dziennika:', err.message);
+      }
+    };
+
+    if (newItemsToNotify.length) {
+      notifySubscribers(newItemsToNotify)
+        .then((wynik) => zapiszDziennik(wynik || {}))
+        .catch((err) => {
+          console.error('[push] blad wysylki powiadomien:', err.message);
+          zapiszDziennik({ powod: `blad wysylki: ${err.message}` });
+        });
+    } else {
+      zapiszDziennik({ powod: 'wszystkie nowe wpisy odfiltrowane przed wysylka' });
+    }
   }
 
   return count;

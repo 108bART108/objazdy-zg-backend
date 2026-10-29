@@ -8,11 +8,13 @@ const {
   listUtrudnienia, db, saveSubscription, deleteSubscription,
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
   listHealthReports, listSourceHealth, listSubscriptionSummary,
+  checkPushSilence, getPushStats, recordPushAttempt,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
-const { notifySubscribers, sendTestNotification } = require('./push');
+const { notifySubscribers, sendTestNotification, checkPushConfig } = require('./push');
 const { runWeeklyHealthCheck } = require('./healthcheck');
+const { sendSystemAlert } = require('./systemAlerts');
 const { runDailyAdCheck } = require('./adReminders');
 
 const app = express();
@@ -190,6 +192,14 @@ app.get('/api/admin/subscriptions', (req, res) => {
   res.json({ count: items.length, items });
 });
 
+// Statystyki powiadomien - czy push faktycznie wychodzi. Pozwala
+// odpowiedziec na pytanie "czy powiadomienia dzialaja?" bez czekania,
+// az ktos zglosi, ze nic nie dostaje.
+app.get('/api/admin/push-stats', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  res.json(getPushStats(7));
+});
+
 // Stan zrodel danych - kiedy kazde z nich ostatnio cokolwiek zwrocilo.
 app.get('/api/admin/source-health', (req, res) => {
   if (!checkAdmin(req, res)) return;
@@ -230,6 +240,10 @@ cron.schedule('30 5 * * *', () => {
 
 app.listen(PORT, () => {
   console.log(`Objazdy ZG API dziala na porcie ${PORT}`);
+  // Sprawdzenie konfiguracji powiadomien zaraz po starcie - literowka w
+  // adresie appki albo niewypelniony wzorzec w kontakcie VAPID sa widoczne
+  // od razu w logach wdrozenia, zamiast lezec niezauwazone miesiacami.
+  checkPushConfig();
 });
 
 // Scrapowanie co 10 minut zamiast co 30 - zrodla sa sprawdzane znacznie
@@ -244,6 +258,27 @@ cron.schedule('*/10 * * * *', () => {
   console.log('[cron] uruchamiam scrapeAll...');
   scrapeAll().catch((err) => console.error('[cron] blad:', err));
 });
+
+// Codzienne sprawdzenie, czy powiadomienia faktycznie wychodza.
+//
+// To zabezpieczenie przed cicha awaria: jesli do appki trafiaja nowe
+// wpisy, a nie wychodzi ani jedno powiadomienie, dostaniesz o tym alert
+// zamiast dowiadywac sie od uzytkownikow po kilku tygodniach. Sprawdzenie
+// to pare zapytan do lokalnej bazy - zero kosztu.
+cron.schedule('0 9 * * *', async () => {
+  try {
+    const stan = checkPushSilence();
+    if (!stan.cisza) {
+      console.log(`[cron] kontrola push OK (${stan.wyslane} powiadomien / ${stan.noweWpisy} nowych wpisow w 7 dni)`);
+      return;
+    }
+    console.error('[cron] ALARM - powiadomienia milcza:', stan.powod);
+    recordPushAttempt({ kind: 'alarm', szczegoly: stan.powod });
+    await sendSystemAlert('Powiadomienia nie wychodza', stan.powod);
+  } catch (err) {
+    console.error('[cron] blad kontroli powiadomien:', err.message);
+  }
+}, { timezone: 'Europe/Warsaw' });
 
 // Cotygodniowy automatyczny przeglad zdrowia appki - niedziela 15:30 (Warszawa)
 cron.schedule('30 15 * * 0', () => {

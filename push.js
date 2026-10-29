@@ -38,17 +38,18 @@ function ensureConfigured() {
 // informacje w appce, a dopiero jesli zechce, sam kliknie w tytul
 // wpisu, zeby przejsc do pelnego artykulu na stronie zrodlowej.
 async function notifySubscribers(newItems) {
-  if (!newItems || !newItems.length) return;
+  if (!newItems || !newItems.length) return { dostarczono: 0, bledow: 0, pominietoKategorie: 0 };
   if (!ensureConfigured()) {
     console.warn('[push] brak kluczy VAPID w zmiennych srodowiskowych - pomijam wysylke');
-    return;
+    return { dostarczono: 0, bledow: 0, pominietoKategorie: 0, powod: 'brak kluczy VAPID' };
   }
 
   const subs = getAllSubscriptions();
   console.log(`[push] ${newItems.length} nowych wpisow, ${subs.length} zarejestrowanych subskrybentow`);
-  if (!subs.length) return;
+  if (!subs.length) return { dostarczono: 0, bledow: 0, pominietoKategorie: 0, powod: 'brak subskrybentow' };
 
   let sent = 0;
+  let bledow = 0;
   let pominietePrzezKategorie = 0;
   for (const sub of subs) {
     const prefCategories = sub.categories ? sub.categories.split(',').filter(Boolean) : [];
@@ -91,6 +92,7 @@ async function notifySubscribers(newItems) {
       await webpush.sendNotification(JSON.parse(sub.subscription_json), payload);
       sent++;
     } catch (err) {
+      bledow++;
       console.error(`[push] blad wysylki (${sub.endpoint.slice(0, 40)}...):`, err.statusCode || err.message);
       if (err.statusCode === 404 || err.statusCode === 410) {
         deleteSubscription(sub.endpoint);
@@ -101,6 +103,7 @@ async function notifySubscribers(newItems) {
     ? `, pominieto ${pominietePrzezKategorie} (inne wybrane kategorie)`
     : '';
   console.log(`[push] wyslano ${sent}/${subs.length} powiadomien${opisPominietych}`);
+  return { dostarczono: sent, bledow, pominietoKategorie: pominietePrzezKategorie };
 }
 
 // Testowe powiadomienie do WSZYSTKICH zapisanych urzadzen, z pominieciem
@@ -158,4 +161,43 @@ async function sendTestNotification() {
   return { wyslano: udane, wszystkich: wyniki.length, szczegoly: wyniki };
 }
 
-module.exports = { notifySubscribers, sendTestNotification };
+// Sprawdza konfiguracje powiadomien przy starcie serwera.
+//
+// Powod: dwa z trzech bledow tej awarii byly zwyklymi literowkami w
+// konfiguracji - adres appki wskazywal na stary, nieuzywany host, a
+// kontakt VAPID na niewypelniony wzorzec "twoja-domena.pl". Zaden z nich
+// niczego nie wywalil, wiec przelezaly miesiace. Teraz takie rzeczy
+// krzycza w logach zaraz po wdrozeniu, zamiast czekac na zgloszenie
+// od uzytkownika.
+function checkPushConfig() {
+  const problemy = [];
+
+  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+    problemy.push('brak kluczy VAPID - powiadomienia NIE BEDA wysylane');
+  }
+
+  // Adres, ktory otwiera sie po klknieciu, musi byc tym samym, pod ktorym
+  // appka jest zainstalowana - inaczej klikniecie otwiera przegladarke.
+  if (/onrender\.com/.test(APP_URL)) {
+    problemy.push(`APP_URL wskazuje na host Render (${APP_URL}) zamiast na domene appki - klikniecie w powiadomienie otworzy przegladarke, a nie appke`);
+  }
+  if (!/^https:\/\//.test(APP_URL)) {
+    problemy.push(`APP_URL nie jest adresem https (${APP_URL})`);
+  }
+  if (/twoja-domena|przyklad|example|TODO|zmien/i.test(APP_URL)) {
+    problemy.push(`APP_URL wyglada na niewypelniony wzorzec: ${APP_URL}`);
+  }
+  if (/twoja-domena|przyklad|example|TODO|zmien/i.test(VAPID_CONTACT)) {
+    problemy.push(`kontakt VAPID wyglada na niewypelniony wzorzec: ${VAPID_CONTACT}`);
+  }
+
+  if (problemy.length) {
+    console.error('[push] UWAGA - konfiguracja powiadomien wymaga poprawy:');
+    for (const p of problemy) console.error(`[push]   - ${p}`);
+  } else {
+    console.log(`[push] konfiguracja OK (appka: ${APP_URL}, kontakt: ${VAPID_CONTACT})`);
+  }
+  return problemy;
+}
+
+module.exports = { notifySubscribers, sendTestNotification, checkPushConfig };
