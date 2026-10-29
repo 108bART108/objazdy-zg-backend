@@ -8,7 +8,7 @@ const {
   listUtrudnienia, db, saveSubscription, deleteSubscription,
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
   listHealthReports, listSourceHealth, listSubscriptionSummary,
-  checkPushSilence, getPushStats, recordPushAttempt,
+  checkPushSilence, getPushStats, recordPushAttempt, ensurePushLogStarted,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
@@ -249,6 +249,9 @@ app.listen(PORT, () => {
   // nowych wpisow na wiele godzin, dajac o sobie znac tylko bledem w logach.
   runStartupCheck();
   checkPushConfig();
+  // Zaklada znacznik poczatku zbierania danych o powiadomieniach, zeby
+  // statystyki nie pokazywaly swiezego dziennika jako "zero wyslanych".
+  try { ensurePushLogStarted(); } catch (err) { console.error('[start] nie udalo sie zalozyc dziennika push:', err.message); }
 });
 
 // Scrapowanie co 10 minut zamiast co 30 - zrodla sa sprawdzane znacznie

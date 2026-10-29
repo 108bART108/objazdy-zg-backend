@@ -336,6 +336,31 @@ const PUSH_SILENCE_DAYS = 7;
 const PUSH_SILENCE_MIN_ITEMS = 5;
 const PUSH_ALARM_COOLDOWN_DAYS = 7;
 
+// Od kiedy dziennik push w ogole zbiera dane. Bez tego statystyki
+// porownywalyby wpisy z 7 dni z dziennikiem zalozonym godzine temu i
+// pokazywaly "0 wyslanych powiadomien" jako awarie, choc to tylko brak
+// historii. Znacznik zakladany jest przy pierwszym starcie po wdrozeniu.
+function ensurePushLogStarted() {
+  const istnieje = db.prepare('SELECT 1 FROM push_log LIMIT 1').get();
+  if (!istnieje) {
+    db.prepare("INSERT INTO push_log (kind, szczegoly) VALUES ('start', 'poczatek zbierania danych o powiadomieniach')").run();
+  }
+}
+
+function getPushLogStart() {
+  const r = db.prepare('SELECT created_at FROM push_log ORDER BY id ASC LIMIT 1').get();
+  return r ? r.created_at : null;
+}
+
+// Czy dziennik zbiera dane wystarczajaco dlugo, by jego cisza cokolwiek
+// znaczyla.
+function pushLogDojrzaly(dni) {
+  const start = getPushLogStart();
+  if (!start) return false;
+  const wiek = Date.now() - new Date(start).getTime();
+  return wiek >= dni * 86400000;
+}
+
 function checkPushSilence() {
   const od = new Date(Date.now() - PUSH_SILENCE_DAYS * 86400000).toISOString();
 
@@ -350,6 +375,10 @@ function checkPushSilence() {
   const subskrybenci = db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions').get().n;
 
   const stan = { noweWpisy, wyslane, subskrybenci, cisza: false, powod: null };
+
+  // Swiezo zalozony dziennik nie moze byc dowodem na awarie - przez
+  // pierwsze dni po wdrozeniu po prostu nie ma jeszcze z czym porownywac.
+  if (!pushLogDojrzaly(PUSH_SILENCE_DAYS)) return stan;
 
   // Bez zapisanych urzadzen cisza jest poprawna - nie ma do kogo wysylac.
   if (!subskrybenci) return stan;
@@ -373,7 +402,12 @@ function checkPushSilence() {
 
 // Podsumowanie dla panelu admina: ile powiadomien wyszlo w ostatnich dniach.
 function getPushStats(days = 7) {
-  const od = new Date(Date.now() - days * 86400000).toISOString();
+  const start = getPushLogStart();
+  const oknoOd = new Date(Date.now() - days * 86400000);
+  // Jesli dziennik jest mlodszy niz zadane okno, liczymy od jego zalozenia
+  // - inaczej porownywalibysmy wpisy z 7 dni z wysylkami z jednego dnia.
+  const dziennikMlodszy = start && new Date(start).getTime() > oknoOd.getTime();
+  const od = dziennikMlodszy ? start : oknoOd.toISOString();
   const w = db.prepare(`
     SELECT COALESCE(SUM(dostarczono), 0) AS dostarczono,
            COALESCE(SUM(bledow), 0) AS bledow,
@@ -387,6 +421,8 @@ function getPushStats(days = 7) {
   ).get();
   return {
     dni: days,
+    zbieraOd: start,
+    pelneDane: !dziennikMlodszy,
     noweWpisy,
     dostarczono: w.dostarczono,
     bledow: w.bledow,
@@ -437,7 +473,10 @@ function listSubscriptionSummary() {
     } catch { /* zostawiamy "nieznany" */ }
     return {
       dostawca,
-      kategorie: r.categories || '(brak - nie dostanie nic)',
+      // Pusta lista kategorii oznacza "wszystkie" - tak to traktuje
+      // notifySubscribers w push.js. Wczesniej panel opisywal to jako
+      // "nie dostanie nic", czyli dokladnie odwrotnie niz dziala kod.
+      kategorie: r.categories || '(wszystkie)',
       zapisano: r.created_at,
       // kilka ostatnich znakow, zeby rozroznic urzadzenia bez ujawniania adresu
       id: r.endpoint.slice(-8),
@@ -542,6 +581,7 @@ module.exports = {
   recordPushAttempt,
   checkPushSilence,
   getPushStats,
+  ensurePushLogStarted,
   listSourceHealth,
   listSubscriptionSummary,
   saveSubscription,
