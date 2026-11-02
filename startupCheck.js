@@ -17,6 +17,10 @@ const REQUIRED_DB_EXPORTS = [
   'recordSourceResult',
   'markSourceAlerted',
   'listSourceHealth',
+  'getDescriptionsByUrls',
+  'getSetting',
+  'deactivateByUrls',
+  'setSetting',
   'recordPushAttempt',
   'checkPushSilence',
   'getPushStats',
@@ -36,6 +40,7 @@ const REQUIRED_TABLES = {
   push_subscriptions: ['endpoint', 'subscription_json', 'categories'],
   push_log: ['kind', 'kandydatow', 'dostarczono', 'bledow', 'pominieto_stare', 'pominieto_kategorie'],
   source_health: ['source', 'empty_streak', 'alerted'],
+  app_state: ['klucz', 'wartosc'],
   health_reports: ['report', 'has_problem'],
 };
 

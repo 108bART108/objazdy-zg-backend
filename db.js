@@ -77,6 +77,16 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
+  -- Drobne ustawienia techniczne, ktore musza przetrwac restart serwera.
+  -- Render restartuje usluge przy kazdym wdrozeniu, wiec wszystko trzymane
+  -- tylko w pamieci zaczyna sie wtedy od zera - lacznie z wiedza o tym,
+  -- czego juz probowalismy bez skutku.
+  CREATE TABLE IF NOT EXISTS app_state (
+    klucz TEXT PRIMARY KEY,
+    wartosc TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
   CREATE TABLE IF NOT EXISTS health_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     report TEXT NOT NULL,
@@ -444,6 +454,31 @@ function getPushStats(days = 7) {
   };
 }
 
+// Ukrywa wpisy w appce (active = 0), nie kasujac ich z bazy. Uzywane, gdy
+// scraper rozpozna, ze wczesniej zapisany wpis nie powinien byl tam trafic.
+// Zwraca liczbe wpisow, ktore faktycznie zmienily stan.
+function deactivateByUrls(urls) {
+  if (!urls || !urls.length) return 0;
+  const placeholders = urls.map(() => '?').join(',');
+  const wynik = db
+    .prepare(`UPDATE utrudnienia SET active = 0 WHERE active = 1 AND source_url IN (${placeholders})`)
+    .run(...urls);
+  return wynik.changes;
+}
+
+function getSetting(klucz) {
+  const r = db.prepare('SELECT wartosc FROM app_state WHERE klucz = ?').get(klucz);
+  return r ? r.wartosc : null;
+}
+
+function setSetting(klucz, wartosc) {
+  db.prepare(`
+    INSERT INTO app_state (klucz, wartosc, updated_at)
+    VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    ON CONFLICT(klucz) DO UPDATE SET wartosc = excluded.wartosc, updated_at = excluded.updated_at
+  `).run(klucz, wartosc == null ? null : String(wartosc));
+}
+
 function getLatestFact() {
   return db.prepare('SELECT * FROM daily_fact ORDER BY fact_date DESC LIMIT 1').get();
 }
@@ -583,6 +618,9 @@ module.exports = {
   upsertMany,
   listUtrudnienia,
   getDescriptionsByUrls,
+  getSetting,
+  setSetting,
+  deactivateByUrls,
   getDailyFact,
   deleteDailyFact,
   saveDailyFact,

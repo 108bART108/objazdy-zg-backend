@@ -1,5 +1,5 @@
 const cheerio = require('cheerio');
-const { getDescriptionsByUrls } = require('./db');
+const { getDescriptionsByUrls, getSetting, setSetting, deactivateByUrls } = require('./db');
 const https = require('https');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
@@ -18,6 +18,46 @@ const PAGE_URLS = [
 // objazdy, ktore nie ida do "Aktualnosci". Czytamy ja ZAWSZE dodatkowo
 // (nie zamiast), bo bywa pusta.
 const KOMUNIKATY_URL = 'https://www.mzk.zgora.pl/komunikaty';
+
+// --- Odsiewanie wpisow, ktore nie sa utrudnieniami ---
+//
+// Zakladka "Aktualnosci" MZK sluzy takze do rzeczy niezwiazanych z
+// kursowaniem: ofert reklamowych (sprzedaz powierzchni na autobusach),
+// przetargow, informacji o nagrodach czy nowym taborze. Dla czytelnika
+// appki, ktory wszedl sprawdzic, czy dojedzie do pracy, to szum.
+//
+// Filtr jest celowo OSTROZNY i dwustopniowy: wpis odrzucamy tylko wtedy,
+// gdy pasuje do wzorca "to nie utrudnienie" I JEDNOCZESNIE nie zawiera
+// zadnego sygnalu utrudnienia. Dzieki temu komunikat w rodzaju "zmiana
+// trasy linii 27 w zwiazku z montazem reklam" zostanie w appce, mimo ze
+// pada w nim slowo "reklama". Lepiej przepuscic jeden zbedny wpis niz
+// ukryc przed ludzmi prawdziwy objazd.
+const WZORZEC_NIE_UTRUDNIENIE = new RegExp([
+  'oferta reklamowa', 'ofert[ęe] reklamow', 'reklama na autobus', 'powierzchni reklamow',
+  'przetarg', 'zam[óo]wienie publiczne', 'zapytanie ofertowe',
+  'nagrod[aęy]', 'wyr[óo]żnieni', 'konkurs',
+  'nowy tabor', 'nowe autobusy', 'zakup autobus',
+  'życzenia', 'z okazji', 'jubileusz', 'rocznic[ęay]',
+  'sprzeda[żz] [śs]rodk[óo]w trwa[łl]ych', 'og[łl]oszenie o naborze', 'oferta pracy', 'zatrudni',
+].join('|'), 'i');
+
+// Sygnaly, ze wpis JEDNAK dotyczy kursowania.
+const WZORZEC_UTRUDNIENIE = new RegExp([
+  'objazd', 'zmian\\w* tras', 'zmian\\w* na linii', 'zmian\\w* w kursowaniu', 'zmian\\w* w rozk',
+  'zawieszen', 'wstrzyman', 'przywr[óo]cen', 'wy[łl][ąa]czen[ia]* z ruchu',
+  'rozk[łl]ad', 'korekt[ay]', 'kursowani',
+  'przystan', 'linia nr', 'lini[ie] nr', 'autobus[yu]* nie',
+  'utrudnieni', 'awari', 'remont', 'prace drogow', 'zamkni[ęe]ci',
+].join('|'), 'i');
+
+// Zwraca powod odrzucenia albo null, jesli wpis ma zostac.
+function powodOdrzucenia(tytul, opis) {
+  const tekst = `${tytul} ${opis || ''}`;
+  if (!WZORZEC_NIE_UTRUDNIENIE.test(tekst)) return null;
+  if (WZORZEC_UTRUDNIENIE.test(tekst)) return null;
+  const dopasowanie = tekst.match(WZORZEC_NIE_UTRUDNIENIE);
+  return dopasowanie ? dopasowanie[0] : 'nie dotyczy utrudnien';
+}
 
 // Komunikat, ktorym strona MZK sama oznajmia pusta liste. Rozpoznajemy go,
 // zeby nie traktowac poprawnie dzialajacej, ale pustej zakladki jako bledu.
@@ -181,7 +221,11 @@ function listaProxy() {
     .filter(Boolean);
   // Wlasny posrednik z MZK_PROXY_URL nigdy nie jest odstawiany - to swiadomy
   // wybor administratora, a nie darmowy serwis, ktory moze zniknac.
-  const wszystkie = [...wlasne, ...PROXY_WBUDOWANE.filter((p) => !czyOdstawiony(p))];
+  //
+  // Set usuwa powtorzenia: gdy w MZK_PROXY_URL wpisano posrednika, ktory
+  // jest juz na liscie wbudowanej, bez tego probowalibysmy go DWA RAZY -
+  // czyli czekali dwa limity czasu na ten sam, niedzialajacy serwer.
+  const wszystkie = [...new Set([...wlasne, ...PROXY_WBUDOWANE.filter((p) => !czyOdstawiony(p))])];
   // Posrednik, ktory ostatnio zadzialal, idzie na poczatek kolejki.
   if (dzialajacyProxy && wszystkie.includes(dzialajacyProxy)) {
     return [dzialajacyProxy, ...wszystkie.filter((p) => p !== dzialajacyProxy)];
@@ -269,10 +313,53 @@ async function bezposrednio(url) {
   throw new Error(bledy.join(' | '));
 }
 
+// Jak dlugo pamietamy, ze polaczenie bezposrednie jest blokowane.
+// Blokada adresu IP po stronie MZK nie mija sama z dnia na dzien, a kazda
+// proba kosztuje ok. 18 sekund (limit czasu dla IPv6 i IPv4). Bez tej
+// pamieci kazde wdrozenie - czyli zerowanie stanu w pamieci procesu -
+// zaczynalo od nowa probowac drogi, ktora od tygodni nie dziala.
+const PAMIEC_BLOKADY_DNI = 7;
+const KLUCZ_BLOKADY = 'mzk_polaczenie_bezposrednie_blokowane_od';
+
+function bezposrednieBylooBlokowane() {
+  try {
+    const od = getSetting(KLUCZ_BLOKADY);
+    if (!od) return false;
+    const wiek = Date.now() - new Date(od).getTime();
+    if (isNaN(wiek)) return false;
+    // Po tygodniu sprawdzamy ponownie - blokada mogla zostac zdjeta.
+    return wiek < PAMIEC_BLOKADY_DNI * 86400000;
+  } catch {
+    return false;
+  }
+}
+
+function zapamietajBlokade() {
+  try {
+    if (!getSetting(KLUCZ_BLOKADY)) {
+      setSetting(KLUCZ_BLOKADY, new Date().toISOString());
+      console.warn('[mzk] zapamietuje, ze polaczenie bezposrednie jest blokowane - przez najblizszy tydzien zaczynam od posrednikow');
+    }
+  } catch { /* brak zapisu nie moze przerwac scrapowania */ }
+}
+
+function zapomnijBlokade() {
+  try {
+    if (getSetting(KLUCZ_BLOKADY)) {
+      setSetting(KLUCZ_BLOKADY, null);
+      console.log('[mzk] polaczenie bezposrednie znowu dziala - kasuje pamiec o blokadzie');
+    }
+  } catch { /* jw. */ }
+}
+
 async function pobierzStrone(url) {
   const bledy = [];
   const mamyProxy = listaProxy().length > 0;
   let probowanoProxy = false;
+
+  // Jesli wiemy z poprzednich dni, ze polaczenie bezposrednie jest
+  // blokowane, nie tracimy na nie 18 sekund przy kazdym adresie.
+  if (!wolProxy && bezposrednieBylooBlokowane()) wolProxy = true;
 
   // Jesli poprzednio polaczenie bezposrednie bylo blokowane, a mamy
   // skonfigurowany serwer posredniczacy - zaczynamy od niego, zeby nie
@@ -294,11 +381,15 @@ async function pobierzStrone(url) {
     const res = await bezposrednio(url);
     wolProxy = false;
     przerwaDo = 0; // polaczenie znow dziala - koniec przerwy
+    zapomnijBlokade();
     return res;
   } catch (err) {
     bledy.push(err.message);
     blokadaPolaczenia = toBladPolaczenia(err.message);
-    if (blokadaPolaczenia) wolProxy = true;
+    if (blokadaPolaczenia) {
+      wolProxy = true;
+      zapamietajBlokade();
+    }
   }
 
   // Proxy jako ostatnia deska ratunku - takze wtedy, gdy polaczenie
@@ -537,8 +628,19 @@ async function fetchMzk() {
       console.log(`[mzk] pobieram opisy ${pobrane} z ${limited.length} artykulow (reszta juz w bazie)`);
     }
 
+    const odrzucone = [];
     limited.forEach((a, i) => {
       const description = descriptions[i] || a.title;
+
+      // Wpisy niezwiazane z kursowaniem (oferty reklamowe, przetargi,
+      // nagrody) nie trafiaja do appki.
+      const powod = powodOdrzucenia(a.title, description);
+      if (powod) {
+        console.log(`[mzk] pomijam wpis niezwiazany z utrudnieniami: "${a.title}" (dopasowano: ${powod})`);
+        odrzucone.push(a.href);
+        return;
+      }
+
       // Wyciagamy konkretna date wydarzenia (np. "31 sierpnia") z opisu,
       // a jak jej tam nie ma - probujemy z tytulu. Dzieki temu appka moze
       // pokazac te sama zolta plakietke "Dzisiaj/Jutro/za X dni" co juz
@@ -559,6 +661,20 @@ async function fetchMzk() {
       }
       results.push(checked);
     });
+
+    // Wpis, ktory trafil do bazy ZANIM powstal ten filtr, zostaje w niej na
+    // zawsze - scraper tylko dodaje i aktualizuje, nigdy nie usuwa. Dlatego
+    // ukrywamy w appce takze te, ktore filtr odrzuca dopiero teraz. Dzieki
+    // temu kazda przyszla zmiana regul dziala takze wstecz, bez recznego
+    // sprzatania bazy.
+    if (odrzucone.length) {
+      try {
+        const ukryte = deactivateByUrls(odrzucone);
+        if (ukryte) console.log(`[mzk] ukrylem w appce ${ukryte} wczesniej zapisanych wpisow niezwiazanych z utrudnieniami`);
+      } catch (err) {
+        console.warn('[mzk] nie udalo sie ukryc odrzuconych wpisow:', err.message);
+      }
+    }
   } catch (err) {
     console.error('[mzk] blad pobierania:', err.message);
   }
