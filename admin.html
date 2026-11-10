@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Utrudnienia ZG — panel reklam</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root{
+    --bg:#F1EFE8; --surface:#FFFFFF; --text:#2C2C2A; --muted:#5F5E5A;
+    --border:#E4E2D9; --accent:#1B5E20; --danger:#A32D2D; --danger-bg:#FCEBEB;
+    --warn:#8A5A00; --warn-bg:#FDF4DC;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);}
+  .wrap{max-width:520px;margin:0 auto;padding:20px 16px 60px;}
+  h1{font-size:18px;margin:16px 0 4px;}
+  p.sub{color:var(--muted);font-size:13px;margin:0 0 20px;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;}
+  label{display:block;font-size:12.5px;font-weight:600;color:var(--muted);margin:12px 0 4px;}
+  label:first-child{margin-top:0;}
+  input{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--bg);color:var(--text);}
+  input:focus{outline:2px solid var(--accent);outline-offset:-1px;}
+  button{cursor:pointer;border:none;border-radius:8px;font-weight:600;font-size:14px;padding:11px 16px;}
+  .btn-primary{background:var(--accent);color:#fff;width:100%;margin-top:16px;}
+  .btn-primary:active{opacity:0.85;}
+  .btn-cancel-edit{background:transparent;color:var(--muted);width:100%;margin-top:8px;text-decoration:underline;}
+  .btn-danger{background:var(--danger-bg);color:var(--danger);font-size:12.5px;padding:7px 12px;}
+  .btn-edit{background:var(--bg);color:var(--text);border:1px solid var(--border);font-size:12.5px;padding:7px 12px;}
+  .ad-actions{display:flex;flex-direction:column;gap:6px;flex-shrink:0;}
+  .status{font-size:13px;margin-top:10px;min-height:18px;}
+  .status.ok{color:var(--accent);}
+  .status.err{color:var(--danger);}
+  .ad-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border);gap:10px;}
+  .ad-row:last-child{border-bottom:none;}
+  .ad-info b{display:block;font-size:14px;}
+  .ad-info span{display:block;font-size:12.5px;color:var(--muted);margin-top:2px;}
+  .ad-info a{font-size:12px;color:var(--accent);}
+  .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;margin-left:6px;}
+  .badge-active{background:#E6F4EA;color:var(--accent);}
+  .badge-inactive{background:var(--border);color:var(--muted);}
+  .badge-soon{background:var(--warn-bg);color:var(--warn);}
+  .key-gate{text-align:center;padding-top:60px;}
+  .key-gate input{max-width:280px;margin:12px auto 0;}
+  .hidden{display:none;}
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:12px 0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="gate" class="key-gate">
+    <h1>🔒 Panel reklam — Utrudnienia ZG</h1>
+    <p class="sub">Podaj swój klucz administracyjny (ADMIN_KEY z Render), żeby wejść.</p>
+    <input type="password" id="keyInput" placeholder="ADMIN_KEY">
+    <br>
+    <button class="btn-primary" id="keySubmit" style="max-width:280px;">Wejdź</button>
+    <p class="status err" id="gateStatus"></p>
+  </div>
+
+  <div id="panel" class="hidden">
+    <h1>Panel reklam — Utrudnienia ZG</h1>
+    <p class="sub">Dodawaj, edytuj i wyłączaj reklamy lokalnych firm wyświetlane w appce.</p>
+
+    <div class="card">
+      <label for="fName">Nazwa firmy</label>
+      <input id="fName" placeholder="np. Pizzeria Bella Vista">
+      <label for="fTagline">Krótkie hasło reklamowe</label>
+      <input id="fTagline" placeholder="np. Najlepsza pizza w Zielonej Górze — zamów online!">
+      <label for="fLink">Adres strony firmy (link)</label>
+      <input id="fLink" placeholder="https://przyklad-firma.pl">
+      <label for="fStarts">Emisja od (opcjonalnie)</label>
+      <input id="fStarts" type="date">
+      <p class="sub" style="margin:4px 0 10px;">Zostaw puste, żeby reklama ruszyła od razu. Z datą w przyszłości możesz dodać reklamę zaraz po podpisaniu umowy — do tego dnia będzie czekać jako „zaplanowana” i nikt jej w appce nie zobaczy.</p>
+      <label for="fExpires">Emisja do (opcjonalnie)</label>
+      <input id="fExpires" type="date">
+      <p class="sub" style="margin:4px 0 0;">Zostaw puste dla reklamy bezterminowej. Tydzień przed końcem dostaniesz przypomnienie push, a po terminie reklama sama się wyłączy. Obie daty są włączne — przy okresie 1–31 stycznia reklama wyświetla się także pierwszego i trzydziestego pierwszego.</p>
+      <button class="btn-primary" id="addBtn">Dodaj reklamę</button>
+      <button class="btn-cancel-edit hidden" id="cancelEditBtn">Anuluj edycję</button>
+      <p class="status" id="addStatus"></p>
+    </div>
+
+    <div class="card">
+      <h2 style="font-size:15px;margin:0 0 4px;">Twoje reklamy</h2>
+      <div id="adsList"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API_BASE_URL = window.location.hostname === 'localhost'
+  ? 'http://localhost:3000'
+  : 'https://objazdy-zg-backend1.onrender.com';
+
+let adminKey = '';
+let currentAdsList = [];
+let editingId = null;
+
+const gate = document.getElementById('gate');
+const panel = document.getElementById('panel');
+const keyInput = document.getElementById('keyInput');
+const gateStatus = document.getElementById('gateStatus');
+
+function escapeHtml(text){
+  const div = document.createElement('div');
+  div.textContent = text == null ? '' : String(text);
+  return div.innerHTML;
+}
+
+function daysUntil(dateStr){
+  const target = new Date(dateStr + 'T00:00:00');
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  return Math.round((target - today) / 86400000);
+}
+
+async function loadAds(){
+  const list = document.getElementById('adsList');
+  list.innerHTML = '<p class="empty">Wczytuję…</p>';
+  try{
+    const res = await fetch(`${API_BASE_URL}/api/admin/ads`, {
+      headers: { 'x-admin-key': adminKey }
+    });
+    if(!res.ok) throw new Error('blad pobierania');
+    const json = await res.json();
+    renderAds(json.items || []);
+  }catch(e){
+    list.innerHTML = '<p class="empty">Nie udało się wczytać listy reklam.</p>';
+  }
+}
+
+function renderAds(items){
+  currentAdsList = items;
+  const list = document.getElementById('adsList');
+  if(items.length === 0){
+    list.innerHTML = '<p class="empty">Brak dodanych reklam.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  items.forEach(ad => {
+    const row = document.createElement('div');
+    row.className = 'ad-row';
+
+    // Reklama wlaczona, ale z data startu w przyszlosci, nie jest jeszcze
+    // widoczna w appce. Bez osobnej etykiety wygladalaby na "aktywna",
+    // co latwo pomylic z emisja, ktora juz leci.
+    const notStartedYet = ad.active && ad.starts_at && daysUntil(ad.starts_at) > 0;
+
+    let badge;
+    if(!ad.active){
+      badge = '<span class="badge badge-inactive">wyłączona</span>';
+    } else if(notStartedYet){
+      badge = '<span class="badge badge-soon">zaplanowana</span>';
+    } else {
+      badge = '<span class="badge badge-active">aktywna</span>';
+    }
+
+    const period = [];
+    if(ad.starts_at) period.push(`od ${escapeHtml(ad.starts_at)}`);
+    if(ad.expires_at) period.push(`do ${escapeHtml(ad.expires_at)}`);
+    let periodLine = period.length ? ` · emisja ${period.join(' ')}` : '';
+
+    if(ad.expires_at && ad.active && !notStartedYet){
+      const d = daysUntil(ad.expires_at);
+      if(d <= 7 && d >= 0){
+        badge += '<span class="badge badge-soon">wkrótce wygasa</span>';
+      }
+    }
+
+    row.innerHTML = `
+      <div class="ad-info">
+        <b>${escapeHtml(ad.business_name)}${badge}</b>
+        <span>${escapeHtml(ad.tagline)}${periodLine}</span>
+        <a href="${escapeHtml(ad.link_url)}" target="_blank" rel="noopener">${escapeHtml(ad.link_url)}</a>
+      </div>
+      <div class="ad-actions">
+        <button class="btn-edit" data-id="${ad.id}">Edytuj</button>
+        ${ad.active ? `<button class="btn-danger" data-id="${ad.id}">Wyłącz</button>` : ''}
+      </div>
+    `;
+    list.appendChild(row);
+  });
+
+  list.querySelectorAll('.btn-edit').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ad = currentAdsList.find(a => a.id === Number(btn.dataset.id));
+      if(!ad) return;
+      editingId = ad.id;
+      document.getElementById('fName').value = ad.business_name;
+      document.getElementById('fTagline').value = ad.tagline;
+      document.getElementById('fLink').value = ad.link_url;
+      document.getElementById('fStarts').value = ad.starts_at || '';
+      document.getElementById('fExpires').value = ad.expires_at || '';
+      document.getElementById('addBtn').textContent = 'Zapisz zmiany';
+      document.getElementById('cancelEditBtn').classList.remove('hidden');
+      document.getElementById('addStatus').textContent = '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  });
+
+  list.querySelectorAll('.btn-danger').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Wyłączam…';
+      try{
+        await fetch(`${API_BASE_URL}/api/admin/ads/${btn.dataset.id}/deactivate`, {
+          method: 'POST',
+          headers: { 'x-admin-key': adminKey }
+        });
+        loadAds();
+      }catch(e){
+        btn.disabled = false;
+        btn.textContent = 'Wyłącz';
+      }
+    });
+  });
+}
+
+document.getElementById('keySubmit').addEventListener('click', async () => {
+  const key = keyInput.value.trim();
+  if(!key){ gateStatus.textContent = 'Wpisz klucz.'; return; }
+  gateStatus.textContent = 'Sprawdzam…';
+  try{
+    const res = await fetch(`${API_BASE_URL}/api/admin/ads`, {
+      headers: { 'x-admin-key': key }
+    });
+    if(!res.ok) throw new Error('zly klucz');
+    adminKey = key;
+    gate.classList.add('hidden');
+    panel.classList.remove('hidden');
+    loadAds();
+  }catch(e){
+    gateStatus.textContent = 'Nieprawidłowy klucz. Sprawdź ADMIN_KEY na Render.';
+  }
+});
+
+keyInput.addEventListener('keydown', (e) => {
+  if(e.key === 'Enter') document.getElementById('keySubmit').click();
+});
+
+function resetForm(){
+  editingId = null;
+  document.getElementById('fName').value = '';
+  document.getElementById('fTagline').value = '';
+  document.getElementById('fLink').value = '';
+  document.getElementById('fStarts').value = '';
+  document.getElementById('fExpires').value = '';
+  document.getElementById('addBtn').textContent = 'Dodaj reklamę';
+  document.getElementById('cancelEditBtn').classList.add('hidden');
+}
+
+document.getElementById('cancelEditBtn').addEventListener('click', () => {
+  resetForm();
+  document.getElementById('addStatus').textContent = '';
+});
+
+document.getElementById('addBtn').addEventListener('click', async () => {
+  const business_name = document.getElementById('fName').value.trim();
+  const tagline = document.getElementById('fTagline').value.trim();
+  const link_url = document.getElementById('fLink').value.trim();
+  const starts_at = document.getElementById('fStarts').value;
+  const expires_at = document.getElementById('fExpires').value;
+  const addStatus = document.getElementById('addStatus');
+
+  if(!business_name || !tagline || !link_url){
+    addStatus.className = 'status err';
+    addStatus.textContent = 'Wypełnij wymagane pola.';
+    return;
+  }
+  if(!/^https?:\/\//i.test(link_url)){
+    addStatus.className = 'status err';
+    addStatus.textContent = 'Link musi zaczynać się od https:// lub http://';
+    return;
+  }
+  // Odwrocony zakres to reklama, ktora nigdy sie nie wyswietli. Serwer tez
+  // to sprawdza, ale tutaj mowimy o tym od razu, bez wysylki.
+  if(starts_at && expires_at && starts_at > expires_at){
+    addStatus.className = 'status err';
+    addStatus.textContent = 'Data rozpoczęcia jest późniejsza niż data zakończenia.';
+    return;
+  }
+
+  const isEditing = editingId !== null;
+  addStatus.className = 'status';
+  addStatus.textContent = isEditing ? 'Zapisuję zmiany…' : 'Dodaję…';
+  try{
+    const url = isEditing
+      ? `${API_BASE_URL}/api/admin/ads/${editingId}`
+      : `${API_BASE_URL}/api/admin/ads`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': adminKey },
+      body: JSON.stringify({ business_name, tagline, link_url, starts_at, expires_at })
+    });
+    if(!res.ok) throw new Error('blad zapisu');
+    addStatus.className = 'status ok';
+    addStatus.textContent = isEditing ? 'Zapisano zmiany!' : 'Dodano reklamę!';
+    resetForm();
+    loadAds();
+  }catch(e){
+    addStatus.className = 'status err';
+    addStatus.textContent = 'Coś poszło nie tak. Spróbuj ponownie.';
+  }
+});
+</script>
+</body>
+</html>
