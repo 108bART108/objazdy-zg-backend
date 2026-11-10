@@ -7,13 +7,16 @@ const cron = require('node-cron');
 const {
   listUtrudnienia, db, saveSubscription, deleteSubscription,
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
-  getRandomFact,
+  listHealthReports, listSourceHealth, listSubscriptionSummary,
+  checkPushSilence, getPushStats, recordPushAttempt, ensurePushLogStarted,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
-const { getTodayFact, ensureTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
-const { notifySubscribers } = require('./push');
+const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
+const { notifySubscribers, sendTestNotification, checkPushConfig } = require('./push');
 const { runWeeklyHealthCheck } = require('./healthcheck');
+const { sendSystemAlert } = require('./systemAlerts');
 const { runDailyAdCheck } = require('./adReminders');
+const { runStartupCheck } = require('./startupCheck');
 
 const app = express();
 
@@ -66,16 +69,6 @@ app.get('/api/ciekawostka', async (_req, res) => {
   }
 });
 
-// Losowa ciekawostka z archiwum - uzywana przez przycisk "Zobacz starsze
-// ciekawostki", gdy dzisiejsza jeszcze nie jest gotowa. Czyta tylko z bazy,
-// nie wola API, wiec nic nie kosztuje i odpowiada natychmiast.
-app.get('/api/ciekawostka/losowa', (req, res) => {
-  const exclude = typeof req.query.pomin === 'string' ? req.query.pomin : '';
-  const fact = getRandomFact(exclude);
-  if (!fact) return res.json({ date: null, content: null });
-  res.json({ date: fact.fact_date, content: fact.content });
-});
-
 // Wymusza usuniecie dzisiejszej ciekawostki i wygenerowanie nowej -
 // przydatne, gdy dzisiejsza wersja okaze sie wadliwa.
 app.post('/api/admin/ciekawostka/regenerate', async (req, res) => {
@@ -88,98 +81,6 @@ app.post('/api/admin/ciekawostka/regenerate', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// Wygodna wersja powyzszego do klikniecia z przegladarki lub telefonu -
-// bez terminala i bez narzedzi developerskich. Adres z kluczem w srodku
-// mozna zapisac w zakladkach. Klucz jest osobny od ADMIN_KEY (ADMIN_URL_KEY),
-// bo adresy laduja w historii przegladarki i w logach serwera, wiec nie
-// chcemy tam glownego klucza administracyjnego. Bez ADMIN_URL_KEY funkcja
-// jest po prostu wylaczona.
-// Generowanie trwa od 30 sekund do dwoch minut (szukanie faktu, weryfikacja,
-// korekta, kontrola slownikiem, w razie potrzeby trzy podejscia). Przegladarka
-// tyle nie czeka, dlatego praca idzie w tle, a strona odpowiada natychmiast
-// i sama sie odswieza, az bedzie wynik.
-let regen = { running: false, error: null, result: null, finishedAt: 0 };
-
-// Wynik pokazujemy tylko przez 10 minut. Pozniejsze wejscie na ten sam adres
-// oznacza, ze chcesz nowa ciekawostke, a nie podglad poprzedniej.
-const REGEN_RESULT_TTL_MS = 10 * 60 * 1000;
-
-function startRegen() {
-  if (regen.running) return;
-  regen = { running: true, error: null, result: null, finishedAt: 0 };
-  forceRegenerateTodayFact()
-    .then((fact) => { regen.result = fact.content; })
-    .catch((err) => {
-      console.error('[ciekawostka] blad regeneracji z linku:', err.message);
-      regen.error = err.message;
-    })
-    .finally(() => {
-      regen.running = false;
-      regen.finishedAt = Date.now();
-    });
-}
-
-app.get('/admin/nowa-ciekawostka', (req, res) => {
-  const urlKey = process.env.ADMIN_URL_KEY;
-  if (!urlKey) {
-    return res.status(503).send(adminPage('Funkcja wylaczona', 'Nie ustawiono zmiennej ADMIN_URL_KEY w panelu Render.', 'error'));
-  }
-  if (req.query.klucz !== urlKey) {
-    return res.status(403).send(adminPage('Brak dostepu', 'Nieprawidlowy klucz w adresie.', 'error'));
-  }
-
-  const self = `/admin/nowa-ciekawostka?klucz=${encodeURIComponent(urlKey)}`;
-
-  if (regen.running) {
-    return res.send(adminPage('Generuje nowa ciekawostke...',
-      'Szukam faktu, sprawdzam zrodla i kontroluje polszczyzne. To potrwa do dwoch minut - ta strona odswiezy sie sama.',
-      'working', self));
-  }
-
-  const stale = Date.now() - regen.finishedAt > REGEN_RESULT_TTL_MS;
-  if (req.query.ponow === '1' || stale || (!regen.result && !regen.error)) {
-    startRegen();
-    return res.send(adminPage('Generuje nowa ciekawostke...',
-      'Szukam faktu, sprawdzam zrodla i kontroluje polszczyzne. To potrwa do dwoch minut - ta strona odswiezy sie sama.',
-      'working', self));
-  }
-
-  if (regen.error) {
-    return res.send(adminPage('Nie udalo sie', regen.error, 'error', `${self}&ponow=1`));
-  }
-
-  return res.send(adminPage('Gotowe - nowa ciekawostka', regen.result, 'ok', `${self}&ponow=1`));
-});
-
-// state: 'ok' | 'error' | 'working'. Przy 'working' strona odswieza sie sama.
-function adminPage(heading, body, state, link) {
-  const color = state === 'ok' ? '#15803d' : state === 'error' ? '#b91c1c' : '#1d4ed8';
-  const esc = (s) => String(s == null ? '' : s)
-    .replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
-  const refresh = state === 'working' && link
-    ? `<meta http-equiv="refresh" content="8;url=${esc(link)}">`
-    : '';
-  const button = state === 'working'
-    ? ''
-    : (link ? `<a href="${esc(link)}">Wygeneruj jeszcze raz</a>` : '');
-  return `<!doctype html><html lang="pl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">${refresh}
-<title>Ciekawostka - Utrudnienia ZG</title>
-<style>
-body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;padding:24px;
-background:#f8fafc;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center}
-.card{background:#fff;border-radius:14px;padding:28px;max-width:520px;width:100%;
-box-shadow:0 1px 3px rgba(0,0,0,.1),0 8px 24px rgba(0,0,0,.06)}
-h1{margin:0 0 14px;font-size:1.2rem;color:${color}}
-p{margin:0 0 20px;line-height:1.6;font-size:1rem}
-a{display:inline-block;padding:11px 18px;background:#0f172a;color:#fff;
-text-decoration:none;border-radius:8px;font-size:.9rem}
-</style></head><body><div class="card">
-<h1>${esc(heading)}</h1><p>${esc(body)}</p>
-${button}
-</div></body></html>`;
-}
 
 app.get('/api/push/vapid-public-key', (_req, res) => {
   if (!process.env.VAPID_PUBLIC_KEY) {
@@ -279,17 +180,20 @@ app.post('/api/admin/refresh', async (req, res) => {
   }
 });
 
+// Test powiadomien do WSZYSTKICH zapisanych urzadzen.
+//
+// WAZNE: wcześniej ten test udawal nowy wpis w kategorii "drogi" i szedl
+// przez zwykla wysylke, ktora filtruje po kategoriach. Skutek byl mylacy:
+// osoba zapisana tylko na np. MZK NIE DOSTAWALA testu, co wygladalo na
+// awarie powiadomien, choc one dzialaly poprawnie. Teraz test celowo
+// omija filtr kategorii i zwraca raport per urzadzenie, zeby bylo widac,
+// ktore urzadzenie faktycznie przyjelo powiadomienie, a ktore odrzucilo
+// i z jakim bledem.
 app.post('/api/admin/test-push', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
-    await notifySubscribers([{
-      category: 'drogi',
-      street: 'Test powiadomien',
-      title: 'Test powiadomien',
-      description: 'To jest testowe powiadomienie z appki Utrudnienia ZG. Jesli to widzisz, wszystko dziala poprawnie!',
-      source_url: 'https://objazdy-zg-frontend.onrender.com',
-    }]);
-    res.json({ ok: true });
+    const raport = await sendTestNotification();
+    res.json({ ok: true, ...raport });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -305,6 +209,35 @@ app.post('/api/admin/healthcheck', async (req, res) => {
   }
 });
 
+// Kto jest zapisany na powiadomienia i na jakie kategorie - do diagnozy,
+// gdy ktos zglasza, ze powiadomienia nie dochodza.
+app.get('/api/admin/subscriptions', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const items = listSubscriptionSummary();
+  res.json({ count: items.length, items });
+});
+
+// Statystyki powiadomien - czy push faktycznie wychodzi. Pozwala
+// odpowiedziec na pytanie "czy powiadomienia dzialaja?" bez czekania,
+// az ktos zglosi, ze nic nie dostaje.
+app.get('/api/admin/push-stats', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  res.json(getPushStats(7));
+});
+
+// Stan zrodel danych - kiedy kazde z nich ostatnio cokolwiek zwrocilo.
+app.get('/api/admin/source-health', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  res.json({ items: listSourceHealth() });
+});
+
+// Historia cotygodniowych raportow zdrowia appki - do wyswietlenia w
+// panelu admina, zamiast grzebania w logach Render.
+app.get('/api/admin/health-reports', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  res.json({ items: listHealthReports() });
+});
+
 // Recznie wywolane sprawdzenie wygasajacych/wygaslych reklam (do testow)
 app.post('/api/admin/ads-check', async (req, res) => {
   if (!checkAdmin(req, res)) return;
@@ -316,34 +249,104 @@ app.post('/api/admin/ads-check', async (req, res) => {
   }
 });
 
+// Codzienne przygotowanie ciekawostki Z WYPRZEDZENIEM, wczesnym rankiem
+// (5:30 czasu polskiego) - zanim ktokolwiek otworzy appke. getTodayFact()
+// samo sprawdza cache (tabela daily_fact) i generuje nowa tresc tylko
+// jesli jeszcze jej nie ma, wiec to bezpieczne w wywolaniu takze wtedy,
+// gdyby z jakiegos powodu ciekawostka na dzis juz istniala. Dzieki temu
+// pierwszy uzytkownik dnia, ktory otworzy zakladke Ciekawostka, dostaje
+// juz gotowa, zapisana w bazie tresc - dokladnie tak szybko jak pozostale
+// kategorie - zamiast czekac na dwuetapowe (generowanie + recenzja)
+// zapytanie do Claude z wyszukiwaniem w internecie na zywo.
+cron.schedule('30 5 * * *', () => {
+  console.log('[cron] przygotowuje dzisiejsza ciekawostke z wyprzedzeniem...');
+  getTodayFact({ wait: true }).catch((err) => console.error('[cron] blad przygotowania ciekawostki:', err.message));
+}, { timezone: 'Europe/Warsaw' });
+
 app.listen(PORT, () => {
   console.log(`Objazdy ZG API dziala na porcie ${PORT}`);
+  // Sprawdzenie konfiguracji powiadomien zaraz po starcie - literowka w
+  // adresie appki albo niewypelniony wzorzec w kontakcie VAPID sa widoczne
+  // od razu w logach wdrozenia, zamiast lezec niezauwazone miesiacami.
+  // Czy wszystkie wgrane pliki sa z tej samej wersji. Niespojne wdrozenie
+  // (np. nowy scrapeAll.js przy starym db.js) potrafi zatrzymac zapisywanie
+  // nowych wpisow na wiele godzin, dajac o sobie znac tylko bledem w logach.
+  runStartupCheck();
+  checkPushConfig();
+  // Zaklada znacznik poczatku zbierania danych o powiadomieniach, zeby
+  // statystyki nie pokazywaly swiezego dziennika jako "zero wyslanych".
+  try { ensurePushLogStarted(); } catch (err) { console.error('[start] nie udalo sie zalozyc dziennika push:', err.message); }
 });
 
-cron.schedule('*/30 * * * *', () => {
+// Scrapowanie co 10 minut zamiast co 30 - zrodla sa sprawdzane znacznie
+// czesciej, wiec nowy komunikat (np. objazd na Wszystkich Swietych) trafia
+// do appki w ciagu kilkunastu minut, a nie po godzinie.
+//
+// KOSZT: zero. Scrapowanie to zwykle pobranie stron HTTP z serwera, ktory
+// i tak dziala 24/7 w stalej cenie - nie ma tu zadnego platnego API.
+// Jedyne platne wywolania (Anthropic) dotycza ciekawostki i maja wlasny
+// twardy limit 3 na dobe, calkowicie niezalezny od tego harmonogramu.
+// Ile cykli scrapowania moze padnac z rzedu, zanim dostaniesz alert.
+// 3 cykle to ok. 30 minut - na tyle dlugo, by nie alarmowac przy
+// chwilowej awarii sieci, i na tyle krotko, by nie dowiedziec sie o
+// zatrzymanej appce po godzinach.
+const SCRAPE_FAILS_BEFORE_ALERT = 3;
+let kolejneBledyScrapowania = 0;
+let zglosonoAwarieScrapowania = false;
+
+cron.schedule('*/10 * * * *', async () => {
   console.log('[cron] uruchamiam scrapeAll...');
-  scrapeAll().catch((err) => console.error('[cron] blad:', err));
+  try {
+    await scrapeAll();
+    if (kolejneBledyScrapowania >= SCRAPE_FAILS_BEFORE_ALERT) {
+      console.log('[cron] scrapowanie znowu dziala');
+      sendSystemAlert('Scrapowanie znowu dziala', 'Appka wrocila do zapisywania nowych wpisow.')
+        .catch(() => { /* alert jest dodatkiem, nie moze przerwac pracy */ });
+    }
+    kolejneBledyScrapowania = 0;
+    zglosonoAwarieScrapowania = false;
+  } catch (err) {
+    kolejneBledyScrapowania++;
+    console.error(`[cron] blad (${kolejneBledyScrapowania}. raz z rzedu):`, err);
+
+    // Padajace scrapowanie oznacza, ze do appki NIE TRAFIAJA nowe wpisy -
+    // objaw gorszy niz brak jednego zrodla, bo dotyczy wszystkich kategorii
+    // naraz. Wczesniej jedynym sladem byl blad w logach Render.
+    if (kolejneBledyScrapowania >= SCRAPE_FAILS_BEFORE_ALERT && !zglosonoAwarieScrapowania) {
+      zglosonoAwarieScrapowania = true;
+      sendSystemAlert(
+        'Appka nie zapisuje nowych wpisow',
+        `Scrapowanie padlo ${kolejneBledyScrapowania} razy z rzedu: ${err.message}. Sprawdz logi Render.`
+      ).catch(() => { /* jw. */ });
+    }
+  }
 });
+
+// Codzienne sprawdzenie, czy powiadomienia faktycznie wychodza.
+//
+// To zabezpieczenie przed cicha awaria: jesli do appki trafiaja nowe
+// wpisy, a nie wychodzi ani jedno powiadomienie, dostaniesz o tym alert
+// zamiast dowiadywac sie od uzytkownikow po kilku tygodniach. Sprawdzenie
+// to pare zapytan do lokalnej bazy - zero kosztu.
+cron.schedule('0 9 * * *', async () => {
+  try {
+    const stan = checkPushSilence();
+    if (!stan.cisza) {
+      console.log(`[cron] kontrola push OK (${stan.wyslane} powiadomien / ${stan.noweWpisy} nowych wpisow w 7 dni)`);
+      return;
+    }
+    console.error('[cron] ALARM - powiadomienia milcza:', stan.powod);
+    recordPushAttempt({ kind: 'alarm', szczegoly: stan.powod });
+    await sendSystemAlert('Powiadomienia nie wychodza', stan.powod);
+  } catch (err) {
+    console.error('[cron] blad kontroli powiadomien:', err.message);
+  }
+}, { timezone: 'Europe/Warsaw' });
 
 // Cotygodniowy automatyczny przeglad zdrowia appki - niedziela 15:30 (Warszawa)
 cron.schedule('30 15 * * 0', () => {
   console.log('[cron] uruchamiam cotygodniowy przeglad...');
   runWeeklyHealthCheck().catch((err) => console.error('[cron] blad przegladu:', err));
-}, { timezone: 'Europe/Warsaw' });
-
-// Dzienna ciekawostka. Pierwsze podejscie o 5:20 rano, zeby byla gotowa,
-// zanim ktokolwiek otworzy appke. Potem co godzine az do 22:00 - ale
-// ensureTodayFact nie robi nic, jesli ciekawostka na dzis juz jest, wiec
-// te kolejne uruchomienia to tylko samonaprawa na wypadek, gdyby poranne
-// generowanie odpadlo na kontroli jezykowej albo API bylo chwilowo
-// niedostepne. Dzieki temu dzien bez ciekawostki praktycznie sie nie zdarza,
-// a appka nigdy nie publikuje tekstu, ktory nie przeszedl kontroli.
-cron.schedule('20 5-22 * * *', () => {
-  ensureTodayFact()
-    .then((fact) => {
-      if (fact.generated) console.log('[cron] wygenerowano ciekawostke na dzis');
-    })
-    .catch((err) => console.error('[cron] blad ciekawostki:', err.message));
 }, { timezone: 'Europe/Warsaw' });
 
 // Codzienne sprawdzenie reklam (wygasle -> wylacz, wygasajace za <=7 dni -> przypomnienie)
@@ -354,12 +357,4 @@ cron.schedule('0 8 * * *', () => {
 }, { timezone: 'Europe/Warsaw' });
 
 scrapeAll().catch((err) => console.error('[start] blad pierwszego scrapowania:', err));
-
-// Przy starcie serwera tez sprawdzamy, czy ciekawostka na dzis istnieje.
-// Render restartuje usluge przy kazdym deployu, wiec bez tego ciekawostka
-// po wdrozeniu w ciagu dnia czekalaby do najblizszej pelnej godziny.
-ensureTodayFact()
-  .then((fact) => {
-    if (fact.generated) console.log('[start] wygenerowano ciekawostke na dzis');
-  })
-  .catch((err) => console.error('[start] blad ciekawostki:', err.message));
+getTodayFact({ wait: true }).catch((err) => console.error('[start] blad przygotowania ciekawostki:', err.message));
