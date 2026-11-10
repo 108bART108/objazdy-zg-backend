@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -34,13 +35,35 @@ app.use(
   })
 );
 
+// Porownanie klucza odporne na atak czasowy. Zwykle !== przerywa na
+// pierwszym roznym znaku, wiec czas odpowiedzi minimalnie zdradza, ile
+// poczatkowych znakow zgadl atakujacy. Przez internet jest to praktycznie
+// niewykonalne, ale timingSafeEqual nic nie kosztuje, a zamyka temat.
+function safeEqual(a, b) {
+  const bufA = Buffer.from(String(a || ''), 'utf8');
+  const bufB = Buffer.from(String(b || ''), 'utf8');
+  // timingSafeEqual wymaga rownej dlugosci - przy roznej i tak odrzucamy,
+  // bo sama dlugosc klucza nie jest tajemnica.
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 function checkAdmin(req, res) {
   const adminKey = req.header('x-admin-key');
-  if (!process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
+  if (!process.env.ADMIN_KEY || !safeEqual(adminKey, process.env.ADMIN_KEY)) {
     res.status(403).json({ error: 'brak dostepu' });
     return false;
   }
   return true;
+}
+
+// Adres reklamy trafia prosto do atrybutu href w appce i w panelu.
+// Samo escapowanie HTML nie blokuje schematu "javascript:", dlatego
+// dopuszczamy wylacznie http i https. Panel sprawdza to u siebie, ale
+// API jest osobnym wejsciem i musi bronic sie samo.
+function isValidAdLink(url) {
+  if (typeof url !== 'string' || url.length > 500) return false;
+  return /^https?:\/\/[^\s]+$/i.test(url);
 }
 
 // --- API ---
@@ -64,8 +87,13 @@ app.get('/api/ciekawostka', async (_req, res) => {
     const fact = await getTodayFact();
     res.json(fact);
   } catch (err) {
+    // Szczegoly zostaja w logach Render. Na zewnatrz idzie ogolny
+    // komunikat, bo tresc bledu potrafi zdradzic sciezki na serwerze
+    // albo nazwy modulow, a ten endpoint jest publiczny. Endpointy
+    // administracyjne nizej celowo zwracaja pelna tresc - tam czyta ja
+    // tylko ktos z kluczem, czyli Ty w panelu.
     console.error('[ciekawostka] blad generowania:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'nie udalo sie pobrac ciekawostki' });
   }
 });
 
@@ -89,12 +117,57 @@ app.get('/api/push/vapid-public-key', (_req, res) => {
   res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
 });
 
+// Znane uslugi push przegladarek. Lista sluzy WYLACZNIE do logowania -
+// nie odrzucamy po niej zgloszen. Gdyby pojawila sie nowa przegladarka
+// albo dostawca zmienil domene, twarda lista odcielaby prawdziwych
+// uzytkownikow od powiadomien, a tego bledu nikt by nie zauwazyl.
+// Zamiast tego sprawdzamy KSZTALT subskrypcji, ktory jest taki sam u
+// wszystkich dostawcow - to odrzuca smieci, nie odcinajac nikogo.
+const ZNANE_USLUGI_PUSH = /(^|\.)(googleapis\.com|mozilla\.com|windows\.com|apple\.com)$/i;
+
+function sprawdzSubskrypcje(endpoint, subscription) {
+  if (typeof endpoint !== 'string' || endpoint.length > 1000) return 'nieprawidlowy endpoint';
+
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch (err) {
+    return 'endpoint nie jest adresem URL';
+  }
+  if (url.protocol !== 'https:') return 'endpoint musi uzywac https';
+
+  if (!subscription || typeof subscription !== 'object') return 'brak obiektu subscription';
+  if (subscription.endpoint && subscription.endpoint !== endpoint) {
+    return 'endpoint nie zgadza sie z subscription.endpoint';
+  }
+  // Bez tych dwoch kluczy wysylka i tak jest niemozliwa - ich obecnosc
+  // odroznia prawdziwa subskrypcje przegladarki od dowolnego JSON-a.
+  const keys = subscription.keys;
+  if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string') {
+    return 'brak kluczy szyfrujacych w subscription';
+  }
+  if (keys.p256dh.length > 200 || keys.auth.length > 100) return 'klucze maja nieprawidlowa dlugosc';
+
+  if (!ZNANE_USLUGI_PUSH.test(url.hostname)) {
+    console.warn(`[push] subskrypcja z nieznanej uslugi: ${url.hostname} - sprawdz, czy to nowa przegladarka, czy nadużycie`);
+  }
+  return null;
+}
+
 app.post('/api/push/subscribe', (req, res) => {
   const { endpoint, subscription, categories } = req.body || {};
   if (!endpoint || !subscription) {
     return res.status(400).json({ error: 'brak endpoint lub subscription' });
   }
-  const categoriesStr = Array.isArray(categories) ? categories.join(',') : '';
+  const problem = sprawdzSubskrypcje(endpoint, subscription);
+  if (problem) {
+    console.warn(`[push] odrzucono zgloszenie subskrypcji: ${problem}`);
+    return res.status(400).json({ error: 'nieprawidlowa subskrypcja' });
+  }
+
+  const categoriesStr = Array.isArray(categories)
+    ? categories.filter((c) => typeof c === 'string').slice(0, 20).join(',')
+    : '';
   saveSubscription(endpoint, JSON.stringify(subscription), categoriesStr);
   res.json({ ok: true });
 });
@@ -139,6 +212,9 @@ app.post('/api/admin/ads', (req, res) => {
   if (!business_name || !tagline || !link_url) {
     return res.status(400).json({ error: 'wymagane: business_name, tagline, link_url' });
   }
+  if (!isValidAdLink(link_url)) {
+    return res.status(400).json({ error: 'link musi zaczynac sie od http:// lub https://' });
+  }
   const problem = validateAdPeriod({ starts_at, expires_at });
   if (problem) return res.status(400).json({ error: problem });
 
@@ -151,6 +227,9 @@ app.post('/api/admin/ads/:id', (req, res) => {
   const { business_name, tagline, link_url, starts_at, expires_at } = req.body || {};
   if (!business_name || !tagline || !link_url) {
     return res.status(400).json({ error: 'wymagane: business_name, tagline, link_url' });
+  }
+  if (!isValidAdLink(link_url)) {
+    return res.status(400).json({ error: 'link musi zaczynac sie od http:// lub https://' });
   }
   const problem = validateAdPeriod({ starts_at, expires_at });
   if (problem) return res.status(400).json({ error: problem });
