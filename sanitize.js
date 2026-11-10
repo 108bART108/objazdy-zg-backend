@@ -150,6 +150,26 @@ function scanTruncatedStart(description) {
   return problems;
 }
 
+// Adres zrodla pochodzi z atrybutu href na CUDZEJ stronie i trafia prosto
+// do atrybutu href w aplikacji. Escapowanie HTML chroni przed wyrwaniem sie
+// z atrybutu, ale nie blokuje schematu "javascript:" ani "data:" - taki
+// odnosnik wykonalby kod po kliknieciu w naglowek karty. Zadne z naszych
+// zrodel takich linkow nie publikuje, ale sa to cudze strony, nad ktorymi
+// nie mamy kontroli, a koszt tej kontroli jest zerowy.
+// Pusty adres jest dopuszczalny - aplikacja pokazuje wtedy naglowek bez
+// odnosnika - natomiast wpis bez adresu i tak odpada wyzej w scrapeAll.
+function safeSourceUrl(url) {
+  if (typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+  if (trimmed.length > 1000) return '';
+  if (!/^https?:\/\//i.test(trimmed)) {
+    console.warn(`[sanitize] odrzucono adres zrodla o niedozwolonym schemacie: ${trimmed.slice(0, 80)}`);
+    return '';
+  }
+  return trimmed;
+}
+
 // Limit dlugosci opisu. Komunikaty MZK zawieraja wstep plus liste zmian dla
 // kilku linii naraz i potrafia miec ~600 znakow - przy dawnym limicie 400
 // gubily koncowke, czyli najczesciej ostatnia linie autobusowa. Appka i tak
@@ -181,6 +201,7 @@ function sanitizeItems(rawItems) {
       ...raw,
       title: cleanText(raw.title).slice(0, 300),
       description: trimToSentence(cleanText(raw.description), DESCRIPTION_LIMIT),
+      source_url: safeSourceUrl(raw.source_url),
     };
 
     const problems = scanItem(item);
