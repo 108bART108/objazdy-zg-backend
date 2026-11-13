@@ -3,6 +3,48 @@ const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
 const { extractPolishDate } = require('./polishDates');
 
+// ZWiK publikuje na jednej stronie DWIE rozne rzeczy:
+//  1. przerwy w dostawie wody ("nie bedzie wody na ul. X") - zakladka "woda",
+//  2. zapowiedzi robot, ktore zamykaja fragment ulicy - zakladka "drogi".
+//
+// Dawniej wszystko z ZWiK dostawalo na sztywno kategorie "wodociagi". Przez
+// to komunikat zatytulowany wprost "Utrudnienia w ruchu na al. Konstytucji
+// 3 Maja" wisial w zakladce "woda" (13.11.2026) - mieszkaniec szukal go
+// w "drogi" i nie znajdowal, a w "woda" trafial na wpis, ktory wcale nie
+// zapowiadal braku wody.
+//
+// Kierunek bledu nie jest symetryczny: przeoczona przerwa w dostawie wody
+// jest grozniejsza niz komunikat drogowy w nieoczywistej zakladce. Dlatego
+// "wodociagi" zostaje domyslna kategoria, a na "drogi" przenosimy wpis
+// TYLKO wtedy, gdy wprost mowi o ruchu i jednoczesnie NIE zapowiada przerwy
+// w dostawie wody.
+const PRZERWA_WODY_RE = new RegExp([
+  'awari',
+  'przerw\\w*\\s+w\\s+dostaw',
+  'brak\\w*\\s+wody',
+  'bez\\s+wody',
+  'wstrzyman\\w*\\s+dostaw',
+  'nie\\s+b[ęe]dzie\\s+wody',
+  'nie\\s+pop[łl]ynie\\s+woda',
+].join('|'), 'i');
+
+const RUCH_RE = new RegExp([
+  'utrudnieni\\w*\\s+w\\s+ruchu',
+  'organizacj\\w*\\s+ruchu',
+  'zamkni[ęe]ci\\w*\\s+(ulic|drog|skrzy[żz])',
+  'objazd',
+  'nieprzejezdn',
+  'ruch\\w*\\s+wahad[łl]ow',
+  'zw[ęe][żz]eni\\w*\\s+(jezdni|ulic|drog)',
+].join('|'), 'i');
+
+function kategoriaZwik(title, description) {
+  const tekst = `${title} ${description}`;
+  if (PRZERWA_WODY_RE.test(tekst)) return 'wodociagi';
+  if (RUCH_RE.test(tekst)) return 'drogi';
+  return 'wodociagi';
+}
+
 const PAGE_URL = 'https://www.zwik.zgora.pl/aktualnosci/awarie-i-remonty/';
 const PERMALINK_RE = /^https?:\/\/www\.zwik\.zgora\.pl\/\d{4}\/\d{2}\/[a-z0-9-]+\/?$/i;
 const NOISE_TEXTS = ['czytaj więcej', 'awarie i remonty', 'strona główna'];
@@ -100,7 +142,7 @@ async function fetchZwik() {
       const checked = qualityCheck({
         source_url: href,
         source_name: 'ZWiK Zielona Gora',
-        category: 'wodociagi',
+        category: kategoriaZwik(title, description),
         title,
         street: extractStreet(description) || extractStreet(title),
         description,
