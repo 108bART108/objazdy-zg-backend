@@ -8,6 +8,7 @@ const { upsertMany, recordSourceResult, markSourceAlerted, recordPushAttempt } =
 const { sendSystemAlert } = require('./systemAlerts');
 const { notifySubscribers } = require('./push');
 const { qualityCheck } = require('./qualityCheck');
+const { sanitizeItems } = require('./sanitize');
 
 // Normalizuje tekst do porownania "czy to ta sama tresc" - male litery,
 // pojedyncze spacje, bez koncowej interpunkcji. Dzieki temu dwa wpisy
@@ -177,7 +178,30 @@ async function scrapeAll() {
     zdw: fromZdw,
   }).catch((err) => console.error('[scrapeAll] blad kontroli zdrowia zrodel:', err.message));
 
-  const rawItems = [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk, ...fromZwik, ...fromZdw]
+  // Centralne czyszczenie tresci - PRZED qualityCheck i przed zapisem.
+  //
+  // Modul sanitize.js powstal jako "jedno miejsce, przez ktore przechodzi
+  // kazdy wpis z kazdego zrodla", ale przez przeoczenie nigdy nie zostal tu
+  // wpiety: eksportowal funkcje, ktorych nikt nie wywolywal, a healthcheck.js
+  // uzywal z niego tylko scanItem, czyli ZGLASZAL problemy, nie usuwajac ich.
+  // Dlatego do appki trafial opis zaczynajacy sie od ", Wiadomosci
+  // Informujemy, ze..." (ZWiK, 13.11.2026), a zabezpieczenie adresu zrodla
+  // przed schematami "javascript:" i "data:" (safeSourceUrl) bylo martwe.
+  //
+  // Czyscimy przed qualityCheck, zeby kontrola jakosci oceniala tekst, ktory
+  // naprawde zobaczy mieszkaniec, a nie wersje ze smieciami CMS-a.
+  const { items: oczyszczone, warnings: ostrzezeniaTresci } = sanitizeItems(
+    [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk, ...fromZwik, ...fromZdw],
+  );
+
+  for (const ostrzezenie of ostrzezeniaTresci) {
+    console.warn(
+      `[sanitize] ${ostrzezenie.source_name} [${ostrzezenie.category}] `
+      + `"${ostrzezenie.title}": ${ostrzezenie.problems.join('; ')}`,
+    );
+  }
+
+  const rawItems = oczyszczone
     .filter((i) => i.title && i.source_url)
     .map(qualityCheck);
 

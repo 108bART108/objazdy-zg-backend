@@ -97,6 +97,22 @@ const SUSPICIOUS = [
   { re: /^(?:null|undefined|NaN)$/i, msg: 'tekst to wartosc techniczna (null/undefined)' },
 ];
 
+// Tytul czyscimy LZEJ niz opis. Reguly "etykiet na poczatku" maja sens przy
+// opisie, bo tam faktycznie trafia breadcrumb ze strony zrodlowej. Przy
+// tytule byloby to niebezpieczne: prawdziwy naglowek "Informacje dla
+// kierowcow" zostalby obciety do "dla kierowcow". Tytul bierzemy z tekstu
+// odnosnika, wiec smieci CMS-a w nim nie ma - wystarczy usunac szum
+// globalny, encje HTML i zabladzona interpunkcje z poczatku.
+function cleanTitle(input) {
+  if (typeof input !== 'string') return '';
+  let out = input;
+  for (const re of GLOBAL_NOISE) out = out.replace(re, ' ');
+  return out
+    .replace(/\s+/g, ' ')
+    .replace(LEADING_PUNCT_RE, '')
+    .trim();
+}
+
 /**
  * Sprawdza pojedynczy wpis. Zwraca liste opisow problemow (pusta = OK).
  */
@@ -207,7 +223,7 @@ function sanitizeItems(rawItems) {
   for (const raw of rawItems) {
     const item = {
       ...raw,
-      title: cleanText(raw.title).slice(0, 300),
+      title: cleanTitle(raw.title).slice(0, 300),
       description: trimToSentence(cleanText(raw.description), DESCRIPTION_LIMIT),
       source_url: safeSourceUrl(raw.source_url),
     };
@@ -223,9 +239,16 @@ function sanitizeItems(rawItems) {
       });
     }
 
-    // Wpis bez tytulu lub bez opisu jest bezuzyteczny dla uzytkownika -
-    // nie zapisujemy go, zeby w aplikacji nie pojawila sie pusta karta.
-    if (item.title && item.description) items.push(item);
+    // Wpis bez TYTULU nie niesie zadnej informacji - odpada.
+    //
+    // Wpis bez OPISU zostaje, mimo ze karta bedzie uboga. Pierwotnie
+    // odrzucalismy i takie, zeby w appce nie bylo pustych kart. To jednak
+    // zla strona ryzyka dla aplikacji, ktorej caly sens polega na tym, zeby
+    // nie przegapic zamknietej ulicy: pusta karta jest widoczna i mozna ja
+    // poprawic, a cicho wyrzucony komunikat jest niewidoczny. Sam tytul
+    // ("Zamknieta ul. Botaniczna") niesie juz wartosc dla mieszkanca.
+    // Problem i tak jest zglaszany wyzej w warnings.
+    if (item.title) items.push(item);
   }
 
   return { items, warnings };
