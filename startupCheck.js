@@ -112,6 +112,74 @@ function runStartupCheck() {
   }
 
   zglos(problemy);
+
+  // Kontrola tresci jest celowo PO zgloszeniu spojnosci i w osobnym
+  // try/catch: nawet jej calkowita awaria nie moze przeszkodzic
+  // w starcie serwera ani zgubic wyniku kontroli spojnosci.
+  try {
+    sprawdzTresc();
+  } catch (err) {
+    console.error('[start] kontrola tresci nie wykonala sie:', err.message);
+  }
+
+  return problemy;
+}
+
+// ===================== KONTROLA TRESCI =====================
+//
+// Kontrola spojnosci wyzej pilnuje, czy pliki do siebie PASUJA. Nie powie
+// jednak nic o tym, czy nadal ROBIA to, co powinny. 13.11.2026 okazalo sie,
+// ze filtr komunikatow nie zna slowa "budowa", komunikaty ZWiK o ruchu
+// laduja w zakladce "woda", a opisy MZK ucinane sa przez prog 60 znakow -
+// wszystkie pliki byly przy tym idealnie spojne.
+//
+// Dlatego przy kazdym starcie uruchamiamy jeszcze zestawy przypadkow z
+// testUmZgora.js i testMzkOpis.js. To czyste funkcje tekstowe, bez sieci
+// i bez bazy, wiec kosztuja ulamek sekundy.
+//
+// ZASADA: kontrola tresci NIGDY nie moze zatrzymac serwera. Bledny test
+// oznacza, ze cos dziala gorzej - a nie, ze ma nie dzialac nic. Dlatego
+// kazdy test jest w osobnym try/catch i nie ma tu zadnego process.exit().
+const TESTY_TRESCI = [
+  ['filtr i kategorie komunikatow', './testUmZgora'],
+  ['wyciaganie opisow MZK', './testMzkOpis'],
+];
+
+function sprawdzTresc() {
+  let sprawdzonych = 0;
+  const problemy = [];
+
+  for (const [nazwa, modul] of TESTY_TRESCI) {
+    try {
+      // eslint-disable-next-line global-require, import/no-dynamic-require
+      const { uruchomTesty } = require(modul);
+      if (typeof uruchomTesty !== 'function') {
+        problemy.push(`${nazwa}: plik testu nie udostepnia funkcji uruchomTesty`);
+        continue;
+      }
+      const wynik = uruchomTesty();
+      sprawdzonych += wynik.sprawdzonych || 0;
+      for (const blad of wynik.bledy || []) problemy.push(`${nazwa} - ${blad}`);
+    } catch (err) {
+      // Brak pliku testu to nie powod do paniki (np. ktos go nie wgral),
+      // ale warto o tym wiedziec.
+      problemy.push(`${nazwa}: nie udalo sie uruchomic testu (${err.message})`);
+    }
+  }
+
+  if (!problemy.length) {
+    console.log(`[start] kontrola tresci: OK (${sprawdzonych} przypadkow)`);
+    return problemy;
+  }
+
+  console.error('');
+  console.error('==========================================================');
+  console.error(`[start] UWAGA: KONTROLA TRESCI ZGLASZA ${problemy.length} PROBLEM(OW)`);
+  console.error('[start] Appka dziala, ale cos moze trafiac w zle miejsce');
+  console.error('[start] albo byc wyswietlane niepoprawnie:');
+  for (const p of problemy) console.error(`[start]   - ${p}`);
+  console.error('==========================================================');
+  console.error('');
   return problemy;
 }
 

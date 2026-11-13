@@ -59,27 +59,44 @@ const PRZYPADKI = [
   ['Noc Bibliotek w Zielonej Gorze', 'W programie warsztaty i spotkania autorskie.', false, null],
 ];
 
-let bledow = 0;
+/**
+ * Uruchamia wszystkie przypadki. Zwraca { sprawdzonych, bledy }.
+ *
+ * Funkcja NIE wypisuje niczego i NIE konczy procesu - wola ja takze
+ * startupCheck.js przy starcie serwera, a tam process.exit() ubilby
+ * backend zamiast zglosic problem.
+ */
+function uruchomTesty() {
+  const bledy = [];
 
-for (const [tytul, opis, maPrzejsc, zakladka] of PRZYPADKI) {
-  const przeszedl = dotyczyUtrudnienia(tytul, opis);
+  for (const [tytul, opis, maPrzejsc, zakladka] of PRZYPADKI) {
+    const przeszedl = dotyczyUtrudnienia(tytul, opis);
 
-  if (przeszedl !== maPrzejsc) {
-    bledow++;
-    console.log(`BLAD filtra: "${tytul}"`);
-    console.log(`   oczekiwano: ${maPrzejsc ? 'wpuscic' : 'odrzucic'}, jest: ${przeszedl ? 'wpuszczony' : 'odrzucony'}`);
-    continue;
+    if (przeszedl !== maPrzejsc) {
+      bledy.push(
+        `filtr: "${tytul}" - oczekiwano ${maPrzejsc ? 'wpuscic' : 'odrzucic'}, `
+        + `jest ${przeszedl ? 'wpuszczony' : 'odrzucony'}`,
+      );
+      continue;
+    }
+
+    if (!maPrzejsc) continue;
+
+    const kategoria = detectCategory(`${tytul} ${opis}`);
+    if (kategoria !== zakladka) {
+      bledy.push(`kategoria: "${tytul}" - oczekiwano ${zakladka}, jest ${kategoria}`);
+    }
   }
 
-  if (!maPrzejsc) continue;
-
-  const kategoria = detectCategory(`${tytul} ${opis}`);
-  if (kategoria !== zakladka) {
-    bledow++;
-    console.log(`BLAD kategorii: "${tytul}"`);
-    console.log(`   oczekiwano: ${zakladka}, jest: ${kategoria}`);
-  }
+  return { sprawdzonych: PRZYPADKI.length, bledy };
 }
 
-console.log(`\nSprawdzono ${PRZYPADKI.length} komunikatow, bledow: ${bledow}`);
-process.exit(bledow ? 1 : 0);
+// Uruchomienie z linii polecen: node testUmZgora.js
+if (require.main === module) {
+  const { sprawdzonych, bledy } = uruchomTesty();
+  for (const b of bledy) console.log(`BLAD ${b}`);
+  console.log(`\nSprawdzono ${sprawdzonych} komunikatow, bledow: ${bledy.length}`);
+  process.exit(bledy.length ? 1 : 0);
+}
+
+module.exports = { uruchomTesty };

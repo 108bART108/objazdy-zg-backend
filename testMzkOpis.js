@@ -84,49 +84,73 @@ const PRZYPADKI = [
   },
 ];
 
-let bledow = 0;
+/**
+ * Uruchamia wszystkie przypadki. Zwraca { sprawdzonych, bledy, podglad }.
+ *
+ * Funkcja NIE wypisuje niczego i NIE konczy procesu - wola ja takze
+ * startupCheck.js przy starcie serwera, a tam process.exit() ubilby
+ * backend zamiast zglosic problem. "podglad" sluzy tylko do wypisania
+ * wyniku przy uruchomieniu z linii polecen.
+ */
+function uruchomTesty() {
+  const bledy = [];
+  const podglad = [];
 
-for (const p of PRZYPADKI) {
-  const opis = wyciagOpisZHtml(p.html);
-  console.log(`--- ${p.nazwa}`);
+  for (const p of PRZYPADKI) {
+    const opis = wyciagOpisZHtml(p.html);
 
-  if (!opis) {
-    console.log('    BLAD: nie wyciagnieto zadnego opisu');
-    bledow++;
-    continue;
-  }
+    if (!opis) {
+      bledy.push(`${p.nazwa}: nie wyciagnieto zadnego opisu`);
+      podglad.push({ nazwa: p.nazwa, opis: null });
+      continue;
+    }
 
-  console.log(`    "${opis.slice(0, 110)}${opis.length > 110 ? '…' : ''}"`);
-  console.log(`    dlugosc: ${opis.length}`);
+    podglad.push({ nazwa: p.nazwa, opis });
 
-  if (!opis.startsWith(p.musiZaczynacSie)) {
-    console.log(`    BLAD: opis ma sie zaczynac od "${p.musiZaczynacSie}"`);
-    bledow++;
-  }
+    if (!opis.startsWith(p.musiZaczynacSie)) {
+      bledy.push(`${p.nazwa}: opis ma sie zaczynac od "${p.musiZaczynacSie}"`);
+    }
 
-  for (const fragment of p.musiZawierac) {
-    if (!opis.includes(fragment)) {
-      console.log(`    BLAD: brakuje fragmentu "${fragment}"`);
-      bledow++;
+    for (const fragment of p.musiZawierac) {
+      if (!opis.includes(fragment)) {
+        bledy.push(`${p.nazwa}: brakuje fragmentu "${fragment}"`);
+      }
+    }
+
+    // Kontrola krzyzowa: to, co wyciagniemy, nie moze byc zglaszane przez
+    // sanitize jako uciety poczatek. Dokladnie ten sygnal zdradzil blad.
+    const problemy = scanTruncatedStart(opis);
+    if (problemy.length) {
+      bledy.push(`${p.nazwa}: sanitize uznaje opis za uciety -> ${problemy.join('; ')}`);
+    }
+
+    // Stopka nie moze wejsc do opisu.
+    if (/Czytaj więcej/i.test(opis)) {
+      bledy.push(`${p.nazwa}: do opisu wszedl tekst stopki`);
     }
   }
 
-  // Kontrola krzyzowa: to, co wyciagniemy, nie moze byc zglaszane przez
-  // sanitize jako uciety poczatek. Dokladnie ten sygnal zdradzil blad.
-  const problemy = scanTruncatedStart(opis);
-  if (problemy.length) {
-    console.log(`    BLAD: sanitize uznaje opis za uciety -> ${problemy.join('; ')}`);
-    bledow++;
-  }
-
-  // Stopka nie moze wejsc do opisu.
-  if (/Czytaj więcej/i.test(opis)) {
-    console.log('    BLAD: do opisu wszedl tekst stopki');
-    bledow++;
-  }
-
-  console.log('');
+  return { sprawdzonych: PRZYPADKI.length, bledy, podglad };
 }
 
-console.log(`Sprawdzono ${PRZYPADKI.length} artykulow, bledow: ${bledow}`);
-process.exit(bledow ? 1 : 0);
+// Uruchomienie z linii polecen: node testMzkOpis.js
+if (require.main === module) {
+  const { sprawdzonych, bledy, podglad } = uruchomTesty();
+
+  for (const p of podglad) {
+    console.log(`--- ${p.nazwa}`);
+    if (!p.opis) {
+      console.log('    (nie wyciagnieto zadnego opisu)');
+    } else {
+      console.log(`    "${p.opis.slice(0, 110)}${p.opis.length > 110 ? '…' : ''}"`);
+      console.log(`    dlugosc: ${p.opis.length}`);
+    }
+    console.log('');
+  }
+
+  for (const b of bledy) console.log(`BLAD ${b}`);
+  console.log(`Sprawdzono ${sprawdzonych} artykulow, bledow: ${bledy.length}`);
+  process.exit(bledy.length ? 1 : 0);
+}
+
+module.exports = { uruchomTesty };
