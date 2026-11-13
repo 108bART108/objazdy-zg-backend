@@ -7,6 +7,16 @@ const { scanTruncatedStart } = require('./sanitize');
 // co jest w sam raz: kazdy deploy daje uszkodzonym wpisom kolejna szanse.
 const naprawyOpisu = new Map();
 const MAX_PROB_NAPRAWY = 3;
+
+// Ile tresci zbieramy z artykulu. sanitize.js i tak przytnie opis na granicy
+// zdania do 600 znakow - zbieramy odrobine wiecej, zeby mial z czego ciac,
+// i twardo zatrzymujemy sie przy 900, zeby nie wciagnac calej strony.
+const LIMIT_ZBIERANIA = 700;
+const LIMIT_TWARDY = 900;
+
+// Ile artykulow naprawiamy w jednym cyklu. MZK pobieramy przez darmowego
+// posrednika z limitami zapytan, wiec naprawy musza byc kroplowe.
+const MAX_NAPRAW_NA_CYKL = 2;
 const https = require('https');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
@@ -421,60 +431,105 @@ async function pobierzStrone(url) {
   throw new Error(`nie udalo sie pobrac ${url} - ${bledy.join(' | ')}`);
 }
 
-async function fetchArticleDescription(url) {
-  try {
-    const { html } = await pobierzStrone(url);
-    const $ = cheerio.load(html);
+// Samo wyciaganie tresci z HTML - bez sieci, zeby dalo sie je przetestowac.
+//
+// Wczesniej ta logika siedziala w srodku fetchArticleDescription, tuz za
+// pobieraniem strony, wiec nie bylo jak sprawdzic jej na konkretnym
+// artykule bez wychodzenia do internetu. Dlatego blad z progiem 60 znakow
+// przezyl kilka "poprawek" - nikt (ze mna wlacznie) nie uruchomil tej
+// funkcji na prawdziwym komunikacie o ul. Zacisze.
+function wyciagOpisZHtml(html) {
+  const $ = cheerio.load(html);
 
+  {
     // Wstaw spacje w miejscu <br>, zeby sklejone linie nie zlepily sie
     // w jedno slowo po .text() - dotyczy calego dokumentu, nie tylko
     // wybranego akapitu, bo listy (<ul>) tez czesto uzywaja <br>.
     $('br').replaceWith(' ');
 
-    // Krok 1: znajdz PIERWSZY sensowny (nie-boilerplate) akapit dluzszy
-    // niz 60 znakow - to nasz kandydat na opis.
+    // Krok 1: znajdz POCZATEK tresci artykulu.
+    //
+    // Dawny warunek brzmial "pierwszy akapit dluzszy niz 60 znakow" i
+    // wlasnie on gubil komunikaty MZK. Artykul o ul. Zacisze zaczyna sie
+    // akapitem "Informujemy, ze od poniedzialku (19 pazdziernika) nastapi:"
+    // - to 57 znakow, czyli o trzy za malo. Akapit odpadal, kandydatem
+    // zostawal dopiero nastepny ("w zwiazku z powyzszym nastapia zmiany
+    // w kursowaniu...") i mieszkaniec dostawal opis zaczynajacy sie od
+    // odwolania do zdania, ktorego nigdy nie zobaczyl.
+    //
+    // Krotki akapit zakonczony DWUKROPKIEM nie jest szumem - to zapowiedz
+    // listy, czyli najwazniejsze zdanie calego komunikatu. Dlatego liczy
+    // sie tak samo jak dlugi akapit.
+    const zapowiedzListy = (t) => t.length >= 25 && /:\s*$/.test(t);
+
     let $candidate = null;
     let candidateText = null;
     $('p').each((_, el) => {
       if (candidateText) return;
       const $el = $(el);
       const t = $el.text().replace(/\s+/g, ' ').trim();
-      if (t.length > 60 && !BOILERPLATE_RE.test(t)) {
+      if (BOILERPLATE_RE.test(t)) return;
+      if (t.length > 60 || zapowiedzListy(t)) {
         $candidate = $el;
         candidateText = t;
       }
     });
     if (!candidateText) return null;
 
-    // Krok 2: jesli akapit KONCZY SIE DWUKROPKIEM, to prawie na pewno
-    // zapowiada liste, ktora nastepuje zaraz po nim (np. lista linii
-    // autobusowych) - doklejamy ja, zeby nie urywac informacji w polowie.
-    if (/:\s*$/.test(candidateText)) {
-      const $listEl = $candidate.nextAll('ul, ol').first();
-      if ($listEl.length) {
-        const items = [];
-        $listEl.find('li').each((_, li) => {
-          const t = $(li).text().replace(/\s+/g, ' ').trim();
-          if (t) items.push(t);
-        });
-        if (items.length) {
-          candidateText = `${candidateText} ${items.join(', ')}`;
-        }
-      }
-    } else if (candidateText.length < 100) {
-      // Krok 3: jesli akapit jest krotki i NIE konczy sie dwukropkiem
-      // (czyli to raczej niedokonczona/uboga informacja niz zapowiedz
-      // listy), doklejamy jeszcze kolejny sensowny akapit dla kontekstu.
-      const $nextP = $candidate.nextAll('p').first();
-      if ($nextP.length) {
-        const nextText = $nextP.text().replace(/\s+/g, ' ').trim();
-        if (nextText.length > 20 && !BOILERPLATE_RE.test(nextText)) {
-          candidateText = `${candidateText} ${nextText}`;
-        }
-      }
-    }
+    // Krok 2: zbieramy dalsza tresc W KOLEJNOSCI DOKUMENTU - akapity ORAZ
+    // listy. Pojedynczy akapit to dla MZK za malo: typowy komunikat sklada
+    // sie z zapowiedzi ("nastapi:"), listy zmian w ruchu, a dopiero potem
+    // szczegolow dla poszczegolnych linii autobusowych. Dawne kroki 2 i 3
+    // dokladaly tylko JEDEN element - albo liste, albo akapit - wiec
+    // koncowka komunikatu i tak przepadala.
+    const czesci = [candidateText];
+    let dlugosc = candidateText.length;
 
-    return candidateText.slice(0, 400);
+    $candidate.nextAll('p, ul, ol').each((_, el) => {
+      if (dlugosc >= LIMIT_ZBIERANIA) return false;
+
+      const $el = $(el);
+      let tekst;
+      if ($el.is('ul, ol')) {
+        const items = [];
+        $el.find('li').each((_, li) => {
+          const s = $(li).text().replace(/\s+/g, ' ').trim();
+          if (s) items.push(s);
+        });
+        tekst = items.join(', ');
+      } else {
+        tekst = $el.text().replace(/\s+/g, ' ').trim();
+      }
+
+      // Krotkie, samotne fragmenty w rodzaju "Czytaj wiecej" czy "Wstecz" to
+      // nawigacja, a nie tresc komunikatu. sanitize.js i tak usuwa je pozniej
+      // z tekstu, ale lepiej nie zuzywac na nie limitu zbierania.
+      if (!tekst || tekst.length < 15 || BOILERPLATE_RE.test(tekst)) return undefined;
+      czesci.push(tekst);
+      dlugosc += tekst.length + 1;
+      return undefined;
+    });
+
+    // Sklejanie: koniec listy nie ma kropki, wiec zlewalby sie z nastepnym
+    // zdaniem ("...ulicy Rozanej w zwiazku z powyzszym nastapia zmiany").
+    // Jesli poprzedni fragment nie konczy sie znakiem interpunkcyjnym,
+    // a nastepny zaczyna sie mala litera - laczymy je przecinkiem.
+    const sklej = (a, b) => {
+      const potrzebnyPrzecinek = !/[.!?:,;]$/.test(a) && /^[a-ząćęłńóśźż]/.test(b);
+      return potrzebnyPrzecinek ? `${a}, ${b}` : `${a} ${b}`;
+    };
+
+    // Twardego ciecia tutaj NIE robimy - sanitize.js przytnie tekst na
+    // granicy zdania (do 600 znakow). Dawne slice(0, 400) ucinalo w polowie
+    // slowa i gubilo ostatnia linie autobusowa.
+    return czesci.reduce(sklej).slice(0, LIMIT_TWARDY);
+  }
+}
+
+async function fetchArticleDescription(url) {
+  try {
+    const { html } = await pobierzStrone(url);
+    return wyciagOpisZHtml(html);
   } catch (err) {
     console.error(`[mzk] blad pobierania opisu artykulu (${url}):`, err.message);
     return null;
@@ -621,6 +676,7 @@ async function fetchMzk() {
     }
 
     let pobrane = 0;
+    let naprawWTymCyklu = 0;
     const descriptions = await Promise.all(
       limited.map((a) => {
         const zapisany = znaneOpisy.get(a.href);
@@ -646,15 +702,35 @@ async function fetchMzk() {
           // i odpuszczamy do nastepnego restartu.
           if (proby >= MAX_PROB_NAPRAWY) return Promise.resolve(zapisany);
 
-          naprawyOpisu.set(a.href, proby + 1);
+          // Limit na cykl chroni przed sytuacja, w ktorej kilka wpisow naraz
+          // probuje sie naprawic i zjada limity darmowego posrednika.
+          if (naprawWTymCyklu >= MAX_NAPRAW_NA_CYKL) return Promise.resolve(zapisany);
+          naprawWTymCyklu++;
+
           console.log(`[mzk] ponawiam pobranie opisu (proba ${proby + 1}/${MAX_PROB_NAPRAWY}) - zapisany opis wyglada na uciety: "${a.title}"`);
           pobrane++;
 
           return fetchArticleDescription(a.href).then((nowy) => {
-            // Nie wolno pogorszyc tego, co juz mamy: nieudane pobranie
-            // zwroci null, a wyzej zamienioby sie to na sam tytul.
-            if (nowy && !scanTruncatedStart(nowy).length) return nowy;
-            return zapisany;
+            // Nieudane pobranie NIE zuzywa proby: inaczej trzy chwilowe
+            // bledy posrednika zamykalyby droga do naprawy az do restartu.
+            if (!nowy) {
+              console.warn(`[mzk] naprawa opisu: nie udalo sie pobrac artykulu - zostaje opis z bazy ("${a.title}")`);
+              return zapisany;
+            }
+
+            naprawyOpisu.set(a.href, proby + 1);
+
+            if (scanTruncatedStart(nowy).length) {
+              // Artykul pobrany, ale tekst dalej wyglada na uciety - to juz
+              // wina wyciagania tresci albo samego artykulu u zrodla.
+              // Zapisujemy w logu POCZATEK pobranego tekstu, bo bez tego nie
+              // da sie odroznic "nie pobralo sie" od "pobralo sie zle".
+              console.warn(`[mzk] naprawa opisu: pobrany tekst nadal wyglada na uciety ("${a.title}") - poczatek: "${nowy.slice(0, 70)}"`);
+              return zapisany;
+            }
+
+            console.log(`[mzk] naprawa opisu UDANA ("${a.title}") - nowy poczatek: "${nowy.slice(0, 70)}"`);
+            return nowy;
           });
         }
 
@@ -719,4 +795,6 @@ async function fetchMzk() {
   return results;
 }
 
-module.exports = { fetchMzk };
+// wyciagOpisZHtml jest eksportowane wylacznie na potrzeby testu
+// (testMzkOpis.js) - produkcyjnie uzywa go fetchArticleDescription.
+module.exports = { fetchMzk, wyciagOpisZHtml };
