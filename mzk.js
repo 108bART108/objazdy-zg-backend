@@ -1,5 +1,12 @@
 const cheerio = require('cheerio');
 const { getDescriptionsByUrls, getSetting, setSetting, deactivateByUrls } = require('./db');
+const { scanTruncatedStart } = require('./sanitize');
+
+// Ile razy probujemy odzyskac opis, ktory w bazie wyglada na uciety.
+// Licznik zyje tylko w pamieci procesu - po restarcie zaczynamy od nowa,
+// co jest w sam raz: kazdy deploy daje uszkodzonym wpisom kolejna szanse.
+const naprawyOpisu = new Map();
+const MAX_PROB_NAPRAWY = 3;
 const https = require('https');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
@@ -617,9 +624,40 @@ async function fetchMzk() {
     const descriptions = await Promise.all(
       limited.map((a) => {
         const zapisany = znaneOpisy.get(a.href);
-        if (zapisany && zapisany !== a.title && zapisany.length > a.title.length) {
-          return Promise.resolve(zapisany);
+        const mamySensownyZapis = zapisany && zapisany !== a.title && zapisany.length > a.title.length;
+
+        if (mamySensownyZapis) {
+          // Cache nie wiedzial dotad NIC o jakosci tego, co trzyma. Opis raz
+          // pobrany wadliwie (np. zaczynajacy sie od "w zwiazku z powyzszym",
+          // bo scraper zgubil poczatek artykulu) byl od tej pory podawany
+          // z bazy w kazdym cyklu - wiec poprawka w extractArticleText nigdy
+          // do niego nie docierala. Tak przetrwal komunikat o ul. Zacisze,
+          // mimo ze samo wyciaganie tekstu bylo juz naprawione.
+          //
+          // Teraz zapisany opis musi dodatkowo przejsc kontrole poczatku.
+          // Jesli jej nie przechodzi - pobieramy artykul jeszcze raz.
+          const problemy = scanTruncatedStart(zapisany);
+          const proby = naprawyOpisu.get(a.href) || 0;
+
+          if (!problemy.length) return Promise.resolve(zapisany);
+
+          // Artykul moze byc uszkodzony u zrodla - wtedy ponawianie w kazdym
+          // cyklu tylko zjadaloby limity posrednika. Probujemy kilka razy
+          // i odpuszczamy do nastepnego restartu.
+          if (proby >= MAX_PROB_NAPRAWY) return Promise.resolve(zapisany);
+
+          naprawyOpisu.set(a.href, proby + 1);
+          console.log(`[mzk] ponawiam pobranie opisu (proba ${proby + 1}/${MAX_PROB_NAPRAWY}) - zapisany opis wyglada na uciety: "${a.title}"`);
+          pobrane++;
+
+          return fetchArticleDescription(a.href).then((nowy) => {
+            // Nie wolno pogorszyc tego, co juz mamy: nieudane pobranie
+            // zwroci null, a wyzej zamienioby sie to na sam tytul.
+            if (nowy && !scanTruncatedStart(nowy).length) return nowy;
+            return zapisany;
+          });
         }
+
         pobrane++;
         return fetchArticleDescription(a.href);
       })

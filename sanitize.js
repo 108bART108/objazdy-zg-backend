@@ -153,7 +153,17 @@ function scanItem(item) {
 //  2. Opis otwiera sie odwolaniem do czegos, czego czytelnik nie widzial
 //     ("w zwiazku z powyzszym", "zgodnie z powyzszym", "jak wyzej").
 const LOWERCASE_START_OK = /^(ul\.|al\.|pl\.|os\.|dr\.|nr\.?\s|im\.|godz\.|tzw\.|ok\.|ww\.|np\.)/i;
-const DANGLING_REFERENCE_RE = /\b(powy[zż]sz\w*|wy[zż]ej\s+wymienion\w*|jak\s+wy[zż]ej|wspomnian\w*\s+wy[zż]ej)\b/i;
+// Odwolanie wstecz liczy sie tylko wtedy, gdy opis sie OD NIEGO ZACZYNA.
+// Wczesniej sprawdzalismy pierwsze 60 znakow i przez to poprawne zdanie
+// "Zamykamy ul. Zacisze. W zwiazku z powyzszym nastapia zmiany..." bylo
+// zglaszane jako uszkodzone - "powyzszym" odnosilo sie tam do zdania,
+// ktore czytelnik wlasnie przeczytal. Teraz lapiemy wylacznie przypadek,
+// w ktorym tekst otwiera sie odwolaniem do czegos, czego nie ma.
+const DANGLING_REFERENCE_RE = new RegExp(
+  '^\\s*(?:(?:w\\s+zwi[ąa]zku\\s+z|zgodnie\\s+z|wobec|stosownie\\s+do)\\s+)?'
+  + '(?:powy[zż]sz\\w*|wy[zż]ej\\s+wymienion\\w*|jak\\s+wy[zż]ej|wspomnian\\w*\\s+wy[zż]ej)',
+  'i',
+);
 
 function scanTruncatedStart(description) {
   if (!description) return [];
@@ -164,9 +174,10 @@ function scanTruncatedStart(description) {
     problems.push(`opis zaczyna sie mala litera - prawdopodobnie uciety poczatek ("${head.slice(0, 40)}...")`);
   }
 
-  // Odwolanie wstecz w pierwszym zdaniu znaczy, ze brakuje tego, do czego
-  // opis sie odwoluje. Dalej w tekscie jest w porzadku - tam "powyzszym"
-  // odnosi sie do fragmentu, ktory czytelnik juz przeczytal.
+  // Opis OTWIERAJACY sie odwolaniem wstecz znaczy, ze brakuje tego, do
+  // czego sie odwoluje (wzorzec jest zakotwiczony na poczatku tekstu).
+  // Dalej w tekscie jest w porzadku - tam "powyzszym" odnosi sie do
+  // fragmentu, ktory czytelnik juz przeczytal.
   if (DANGLING_REFERENCE_RE.test(head)) {
     problems.push(`opis zaczyna sie od odwolania do brakujacego fragmentu ("${head.slice(0, 40)}...")`);
   }
@@ -254,4 +265,8 @@ function sanitizeItems(rawItems) {
   return { items, warnings };
 }
 
-module.exports = { cleanText, scanItem, sanitizeItems };
+// scanTruncatedStart jest eksportowany, bo korzysta z niego rowniez mzk.js:
+// zanim siegnie po opis zapisany wczesniej w bazie, sprawdza, czy ten opis
+// nie jest przypadkiem uciety. Bez tego raz zle pobrany opis zostawalby
+// w bazie na zawsze - cache nie mial pojecia o jakosci tego, co trzyma.
+module.exports = { cleanText, cleanTitle, scanItem, scanTruncatedStart, sanitizeItems };
