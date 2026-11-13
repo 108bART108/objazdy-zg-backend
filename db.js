@@ -174,6 +174,14 @@ const upsertStmt = db.prepare(`
   INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at, event_date, needs_review, review_reasons)
   VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), @event_date, @needs_review, @review_reasons)
   ON CONFLICT(source_url) DO UPDATE SET
+    -- Kategoria MUSI sie aktualizowac razem z reszta. Bez tej linii wpis raz
+    -- zle zaszufladkowany zostawal w zlej zakladce na zawsze, nawet po
+    -- poprawieniu klasyfikatora - bo przy kolejnym scrapowaniu nadpisywalismy
+    -- tytul i opis, ale kategorie zostawialismy stara. Tak wlasnie utknal
+    -- komunikat "Budowa sieci wodociagowej na al. Konstytucji 3 Maja"
+    -- w zakladce "woda" (12.11.2026). Teraz kazda poprawka w classify.js
+    -- naprawia rowniez wpisy, ktore juz sa w bazie.
+    category = excluded.category,
     title = excluded.title,
     street = excluded.street,
     description = excluded.description,

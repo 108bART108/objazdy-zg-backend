@@ -25,9 +25,9 @@ const { sendSystemAlert } = require('./systemAlerts');
 // to, czy ktos w urzedzie pamietal o zaznaczeniu wlasciwego pola. Kanal
 // glowny usuwa te zaleznosc.
 const FEEDS = [
-  { url: 'https://www.zielona-gora.pl/tag/drogi-w-zielonej-gorze/feed/', name: 'UM Zielona Gora', filtruj: false },
-  { url: 'https://www.zielona-gora.pl/tag/ofensywa-drogowa/feed/', name: 'UM Zielona Gora', filtruj: false },
-  { url: 'https://www.zielona-gora.pl/feed/', name: 'UM Zielona Gora', filtruj: true },
+  { etykieta: 'tag:drogi-w-zielonej-gorze', url: 'https://www.zielona-gora.pl/tag/drogi-w-zielonej-gorze/feed/', name: 'UM Zielona Gora', filtruj: false },
+  { etykieta: 'tag:ofensywa-drogowa', url: 'https://www.zielona-gora.pl/tag/ofensywa-drogowa/feed/', name: 'UM Zielona Gora', filtruj: false },
+  { etykieta: 'kanal glowny', url: 'https://www.zielona-gora.pl/feed/', name: 'UM Zielona Gora', filtruj: true },
 ];
 
 // Sygnaly, ze artykul dotyczy utrudnien w miescie.
@@ -46,6 +46,18 @@ const WZORZEC_UTRUDNIENIA = new RegExp([
   'roboty drogowe', 'prace drogowe', 'prace budowlane',
   'objazd', 'zamkni[ęe]ci\\w* (ulic|drog|przejazd|skrzy[żz]|parking)',
   'zw[ęe][żz]eni', 'utrudnieni',
+  // BUDOWA (nie tylko PRZEbudowa). Komunikat "Ofensywa drogowa. Budowa w
+  // Raculi" z 12.11.2026 nie przeszedl przez zaden z powyzszych wzorcow:
+  // "budowa ulicy" to nie "przebudowa", a "roboty" to nie "roboty drogowe".
+  // Celowo wymagamy po slowie "budowa" obiektu drogowego lub sieciowego -
+  // samo "budowa" wpuscilaby do appki budowe przedszkola czy hali.
+  'budow\\w* (ulic|drog|sieci|ronda|skrzy[żz]|chodnik|[śs]cie[żz]k'
+    + '|kanaliz|wodoci|mostu|wiaduk|parking|torow|w[ęe]z[łl]a|obwodnic)',
+  'teren\\w* budowy', 'plac\\w* budowy',
+  'inwestycj\\w* drogow', 'ofensywa drogowa',
+  'robot\\w* (drogow|budowlan|ziemn|brukarsk)',
+  'prace (remontow|modernizacyjn|brukarsk|ziemn|naprawcz)',
+  'nawierzchni', 'frezowani', 'przy[łl][ąa]cz',
   // infrastruktura drogowa
   'skrzy[żz]owani', 'rondo', 'sygnalizacj\\w* [śs]wietln', 'przejazd kolejow',
   // bezposrednie zwroty do kierowcow i pieszych
@@ -58,31 +70,57 @@ function dotyczyUtrudnienia(tytul, opis) {
   return WZORZEC_UTRUDNIENIA.test(`${tytul} ${opis || ''}`);
 }
 
-// Kanal glowny jest jedynym, ktory wychwytuje artykuly bez tagu drogowego.
-// Gdyby przestal dzialac, kanaly tagowe nadal zwracalyby wpisy - czyli
-// zrodlo "umZgora" wygladaloby na zdrowe, a appka po cichu przestalaby
-// pokazywac czesc komunikatow. Dokladnie tak wygladal blad, przez ktory
-// powstal ten kanal, wiec pilnujemy go osobno.
-const PORAZKI_PRZED_ALERTEM = 8;
-let kolejnePorazkiKanaluGlownego = 0;
-let zgloszonoAwarieKanalu = false;
+// Kazdy kanal moze zepsuc sie osobno, a pozostale to zamaskuja: appka nadal
+// pokazuje wpisy, wiec zrodlo "umZgora" wyglada na zdrowe, tylko czesc
+// komunikatow po cichu przestaje docierac. Taki byl blad, przez ktory
+// powstal kanal glowny - i taki sam moze dotknac kanalow tagowych.
+//
+// Dlatego pilnujemy KAZDEGO kanalu osobno. Poprzednia wersja
+// obserwowala wylacznie kanal glowny, wiec kanal tagowy mogl od miesiecy
+// zwracac blad 404 (np. po zmianie nazwy tagu w urzedzie) albo pusta liste
+// i nikt by sie o tym nie dowiedzial - pozostale kanaly nadal dawaly wpisy,
+// wiec zrodlo "umZgora" wygladalo na zdrowe. Scraper chodzi co 10 minut.
+const BLEDY_PRZED_ALERTEM = 8;   // ok. 80 minut pod rzad bledu pobierania
+const PUSTE_PRZED_ALERTEM = 36;  // ok. 6 godzin pod rzad pustej odpowiedzi
 
-function odnotujWynikKanaluGlownego(udany) {
-  if (udany) {
-    if (zgloszonoAwarieKanalu) console.log('[umZgora] kanal glowny znowu dziala');
-    kolejnePorazkiKanaluGlownego = 0;
-    zgloszonoAwarieKanalu = false;
+const stanKanalow = new Map();
+
+function stan(etykieta) {
+  if (!stanKanalow.has(etykieta)) {
+    stanKanalow.set(etykieta, { bledy: 0, puste: 0, zgloszony: false });
+  }
+  return stanKanalow.get(etykieta);
+}
+
+// wynik: 'ok' | 'blad' | 'pusty'
+function odnotujWynikKanalu(feed, wynik, szczegol) {
+  const s = stan(feed.etykieta);
+
+  if (wynik === 'ok') {
+    if (s.zgloszony) console.log(`[umZgora] kanal "${feed.etykieta}" znowu dziala`);
+    s.bledy = 0; s.puste = 0; s.zgloszony = false;
     return;
   }
-  kolejnePorazkiKanaluGlownego++;
-  if (kolejnePorazkiKanaluGlownego >= PORAZKI_PRZED_ALERTEM && !zgloszonoAwarieKanalu) {
-    zgloszonoAwarieKanalu = true;
-    console.error(`[umZgora] kanal glowny nie dziala od ${kolejnePorazkiKanaluGlownego} cykli - komunikaty bez tagu drogowego nie trafiaja do appki`);
-    sendSystemAlert(
-      'Kanal glowny strony miasta nie dziala',
-      `Od ${kolejnePorazkiKanaluGlownego} cykli nie udaje sie pobrac glownego kanalu zielona-gora.pl. Komunikaty bez tagu drogowego moga nie trafiac do appki.`
-    ).catch(() => { /* alert jest dodatkiem, nie moze przerwac scrapowania */ });
-  }
+
+  if (wynik === 'blad') { s.bledy++; s.puste = 0; } else { s.puste++; s.bledy = 0; }
+
+  const przekroczony = (wynik === 'blad' && s.bledy >= BLEDY_PRZED_ALERTEM)
+    || (wynik === 'pusty' && s.puste >= PUSTE_PRZED_ALERTEM);
+  if (!przekroczony || s.zgloszony) return;
+
+  s.zgloszony = true;
+  const cykli = wynik === 'blad' ? s.bledy : s.puste;
+  const opis = wynik === 'blad'
+    ? `nie udaje sie pobrac kanalu (${szczegol || 'blad pobierania'})`
+    : 'kanal odpowiada, ale nie zawiera ani jednego artykulu';
+
+  console.error(`[umZgora] kanal "${feed.etykieta}" od ${cykli} cykli: ${opis}`);
+  sendSystemAlert(
+    `Kanal "${feed.etykieta}" strony miasta nie dostarcza komunikatow`,
+    `Od ${cykli} cykli ${opis}.\nAdres: ${feed.url}\n\n`
+    + 'Czesc komunikatow moze nie trafiac do appki. Sprawdz, czy adres kanalu '
+    + 'nadal istnieje - urzad mogl zmienic nazwe tagu albo przeniesc go do kategorii.'
+  ).catch(() => { /* alert jest dodatkiem, nie moze przerwac scrapowania */ });
 }
 
 async function fetchUmZgora() {
@@ -90,10 +128,21 @@ async function fetchUmZgora() {
   const widzianeAdresy = new Set();
   let pominietych = 0;
 
+  const podsumowanie = [];
+
   for (const feed of FEEDS) {
     try {
       const parsed = await parser.parseURL(feed.url);
-      for (const item of parsed.items) {
+      const wpisowWKanale = (parsed.items || []).length;
+      let dodanych = 0;
+
+      // Pusty kanal to nie to samo co blad: adres odpowiada poprawnie, tylko
+      // nie ma w nim ani jednego artykulu. Tak wyglada tag, ktory urzad
+      // skasowal albo przemianowal - i dokladnie tak wyglada cisza, ktorej
+      // nie widac z zewnatrz.
+      odnotujWynikKanalu(feed, wpisowWKanale === 0 ? 'pusty' : 'ok');
+
+      for (const item of parsed.items || []) {
         // Ten sam artykul bywa w kanale tagowym i glownym - bierzemy raz.
         if (!item.link || widzianeAdresy.has(item.link)) continue;
 
@@ -108,6 +157,7 @@ async function fetchUmZgora() {
         }
 
         widzianeAdresy.add(item.link);
+        dodanych++;
         const text = `${item.title} ${item.contentSnippet || ''}`;
         results.push({
           source_url: item.link,
@@ -119,12 +169,18 @@ async function fetchUmZgora() {
           published_at: item.isoDate || item.pubDate || new Date().toISOString(),
         });
       }
-      if (feed.filtruj) odnotujWynikKanaluGlownego(true);
+      podsumowanie.push(`${feed.etykieta}: ${wpisowWKanale} w kanale, ${dodanych} nowych`);
     } catch (err) {
       console.error(`[umZgora] blad pobierania ${feed.url}:`, err.message);
-      if (feed.filtruj) odnotujWynikKanaluGlownego(false);
+      odnotujWynikKanalu(feed, 'blad', err.message);
+      podsumowanie.push(`${feed.etykieta}: BLAD (${err.message})`);
     }
   }
+
+  // Jedna linia na cykl, ale pokazuje kazdy kanal z osobna. Bez tego nie da
+  // sie z logow odroznic sytuacji "kanal tagowy nie zwraca nic" od "kanal
+  // tagowy zwraca to samo, co glowny".
+  console.log(`[umZgora] ${podsumowanie.join(' | ')}`);
 
   if (pominietych) {
     console.log(`[umZgora] z kanalu glownego pominieto ${pominietych} artykulow niezwiazanych z utrudnieniami`);
