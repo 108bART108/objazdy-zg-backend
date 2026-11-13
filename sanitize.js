@@ -30,7 +30,15 @@ const LEADING_LABEL_RE = new RegExp(
   'iu',
 );
 
-const LEADING_RULES = [LEADING_AGO_RE, LEADING_CLOCK_RE, LEADING_LABEL_RE];
+// Zagubiony przecinek/myslnik na POCZATKU tekstu - zostaje po wycieciu
+// przez zrodlo wlasnej etykiety. Musi byc czyszczony W PETLI, przed
+// pozostalymi regulami, a nie dopiero na koncu cleanText: tekst
+// ", Wiadomosci Informujemy, ze..." (ZWiK) nie pasowal do wzorca etykiety,
+// bo zaczynal sie od przecinka, a przecinek znikal dopiero po zakonczeniu
+// petli - i slowo "Wiadomosci" zostawalo w opisie na zawsze.
+const LEADING_PUNCT_RE = /^[\s,;:·|–—>»/-]+/;
+
+const LEADING_RULES = [LEADING_PUNCT_RE, LEADING_AGO_RE, LEADING_CLOCK_RE, LEADING_LABEL_RE];
 
 // --- smieci, ktore mozna usunac z dowolnego miejsca tekstu -----------------
 // Te frazy nie wystepuja w prawdziwych komunikatach o utrudnieniach, wiec
