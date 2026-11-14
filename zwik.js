@@ -240,7 +240,7 @@ async function fetchZwik() {
         .slice(0, LIMIT_ZRODLA);
       if (!description) return;
 
-      kandydaci.push({ href, title, description, parsedDate });
+      kandydaci.push({ href, title, description, parsedDate, opisZListy: description });
     });
 
     // Uciete zajawki uzupelniamy trescia z podstron. Musi to byc PO petli,
@@ -258,10 +258,17 @@ async function fetchZwik() {
       // dostac te sama zolta plakietke co Enea/ZDW gdy to zasadne.
       const eventDate = extractPolishDate(description) || extractPolishDate(title);
 
+      // UWAGA: kategorie liczymy z tekstu Z LISTY, a nie z uzupelnionego
+      // opisu. Komunikat "Utrudnienia w ruchu na al. Konstytucji 3 Maja"
+      // to zapowiedz robot i ma byc w zakladce "drogi" - ale jego pelna
+      // tresc z podstrony potrafi gdzies wspomniec o przerwie w dostawie
+      // wody i wtedy wrocilby do "wody", czyli dokladnie tam, skad go
+      // 13.11.2026 wyciagalismy. Dluzszy tekst sluzy do CZYTANIA,
+      // o zakladce decyduje to, czym komunikat jest.
       const checked = qualityCheck({
         source_url: href,
         source_name: 'ZWiK Zielona Gora',
-        category: kategoriaZwik(title, description),
+        category: kategoriaZwik(title, k.opisZListy || description),
         title,
         street: extractStreet(description) || extractStreet(title),
         description,
