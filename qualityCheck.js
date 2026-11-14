@@ -40,7 +40,17 @@ const EVENT_WORDS = [
 // litera po malej - to zlapiemy. Dodatkowo lapiemy zlepek litera+"ul."/"al."
 function fixGluedText(text) {
   if (!text) return text;
-  let fixed = text.replace(/([a-ząćęłńóśźż])([A-ZĄĆĘŁŃÓŚŹŻ])/g, '$1 $2');
+  // Wielka litera musi ZACZYNAC SLOWO, czyli miec po sobie mala litere.
+  //
+  // Bez tego warunku rozrywalismy skroty z wielka litera w srodku -
+  // a najwazniejszy z nich to "ZWiK", ktory wystepuje niemal w kazdym
+  // komunikacie wodociagow i zamienial sie w appce w "ZWi K". Sklejki,
+  // o ktore tu chodzi ("wodyPrzerwa"), maja po wielkiej literze mala,
+  // wiec na ich wykrywaniu nic nie tracimy.
+  let fixed = text.replace(
+    /([a-ząćęłńóśźż])([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż])/g,
+    '$1 $2',
+  );
   // czesty przypadek: "...odpowiedzialnosciaul. Chemiczna" - male "a" + "ul."
   fixed = fixed.replace(/([a-ząćęłńóśźż])(ul\.|al\.|pl\.)\s?([A-ZĄĆĘŁŃÓŚŹŻ])/g, '$1 $2 $3');
   return fixed.replace(/\s+/g, ' ').trim();

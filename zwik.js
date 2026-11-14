@@ -2,6 +2,7 @@ const cheerio = require('cheerio');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
 const { extractPolishDate } = require('./polishDates');
+const { getDescriptionsByUrls } = require('./db');
 const { LIMIT_ZRODLA } = require('./sanitize');
 
 // ZWiK publikuje na jednej stronie DWIE rozne rzeczy:
@@ -82,6 +83,94 @@ function parseRelativeDate(text, now) {
   return null;
 }
 
+// Strona z lista komunikatow ZWiK pokazuje tylko ZAJAWKE - ucina tekst
+// i konczy go wielokropkiem. Przy awarii wodociagu zajawka urywa sie
+// w srodku listy ulic, wiec mieszkaniec dalszej czesci nie widzi wcale.
+// Naszych limitow to nie dotyczy: tresc przychodzi juz ucieta ze zrodla.
+// Pelna wersja jest na podstronie komunikatu ("Czytaj wiecej"), wiec
+// dla ucietych zajawek siegamy po nia.
+const KONCOWKA_URWANIA_RE = /(?:…|\.\.\.|\[…\]|\[\.\.\.\])\s*$/;
+
+// Pobrania sa kroplowe - to zwykla strona WWW, nie API.
+const MAX_POBRAN_SZCZEGOLOW = 4;
+
+function wygladaNaZajawke(tekst) {
+  return KONCOWKA_URWANIA_RE.test(String(tekst || '').trim());
+}
+
+// Wybiera kontener z najwieksza iloscia tekstu akapitowego i skleja jego
+// akapity oraz punkty list w kolejnosci dokumentu.
+function wyciagTrescPodstrony(html) {
+  const $ = cheerio.load(html);
+  $('script, style, nav, header, footer, aside, form').remove();
+
+  let $najlepszy = null;
+  let najwiecej = 0;
+  $('article, main, .entry-content, .post-content, .content, div').each((_, el) => {
+    const dlugosc = $(el).find('p, li').text().replace(/\s+/g, ' ').trim().length;
+    if (dlugosc > najwiecej) {
+      najwiecej = dlugosc;
+      $najlepszy = $(el);
+    }
+  });
+  if (!$najlepszy) return '';
+
+  const czesci = [];
+  $najlepszy.find('p, li').each((_, el) => {
+    const t = $(el).text().replace(/\s+/g, ' ').trim();
+    if (t) czesci.push(t);
+  });
+  return czesci.join(' ').replace(/\s+/g, ' ').trim();
+}
+
+// Uzupelnia uciete zajawki trescia z podstron.
+//
+// ZABEZPIECZENIE: nie mam tu dostepu do prawdziwego HTML-a ZWiK-u, wiec
+// wyciaganie tresci z podstrony jest napisane "w ciemno". Dlatego wynik
+// jest przyjmowany TYLKO wtedy, gdy przeszedl trzy kontrole: jest dluzszy
+// niz zajawka, nie konczy sie wielokropkiem i ZAWIERA poczatek zajawki
+// (czyli na pewno pochodzi z tego samego komunikatu, a nie z menu czy
+// stopki). Jesli ktorakolwiek zawiedzie - zostaje zajawka, czyli stan
+// sprzed zmiany. W najgorszym razie nic sie nie poprawi, ale nic tez
+// nie moze sie zepsuc. Log mowi, co sie wydarzylo.
+async function uzupelnijZajawki(kandydaci, znaneOpisy) {
+  let pobran = 0;
+
+  for (const k of kandydaci) {
+    if (!wygladaNaZajawke(k.description)) continue;
+
+    const zBazy = znaneOpisy.get(k.href);
+    if (zBazy && zBazy.length > k.description.length && !wygladaNaZajawke(zBazy)) {
+      k.description = zBazy;
+      continue;
+    }
+
+    if (pobran >= MAX_POBRAN_SZCZEGOLOW) continue;
+    pobran += 1;
+
+    try {
+      const res = await fetch(k.href, {
+        headers: { 'User-Agent': 'UtrudnieniaZG-bot/1.0 (+info@utrudnienia-zg.pl)' },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const pelny = wyciagTrescPodstrony(await res.text());
+
+      const poczatek = k.description.replace(KONCOWKA_URWANIA_RE, '').trim().slice(0, 40);
+      const pasuje = poczatek.length >= 20
+        && pelny.toLowerCase().includes(poczatek.toLowerCase());
+
+      if (pelny && pelny.length > k.description.length && !wygladaNaZajawke(pelny) && pasuje) {
+        console.log(`[zwik] uzupelniono uciety opis z podstrony (${k.description.length} -> ${pelny.length} zn.): "${k.title}"`);
+        k.description = pelny.slice(0, LIMIT_ZRODLA);
+      } else {
+        console.warn(`[zwik] podstrona nie dala pelniejszej tresci - zostaje zajawka: "${k.title}"`);
+      }
+    } catch (err) {
+      console.warn(`[zwik] nie udalo sie pobrac podstrony (${k.href}): ${err.message}`);
+    }
+  }
+}
+
 async function fetchZwik() {
   const results = [];
   try {
@@ -93,6 +182,7 @@ async function fetchZwik() {
     const $ = cheerio.load(html);
     const base = new URL(PAGE_URL).origin;
     const seen = new Set();
+    const kandydaci = [];
     const now = new Date();
 
     $('h2').each((_, el) => {
@@ -134,6 +224,18 @@ async function fetchZwik() {
         .slice(0, LIMIT_ZRODLA);
       if (!description) return;
 
+      kandydaci.push({ href, title, description, parsedDate });
+    });
+
+    // Uciete zajawki uzupelniamy trescia z podstron. Musi to byc PO petli,
+    // bo cheerio .each() jest synchroniczne i nie da sie w nim czekac na
+    // pobranie strony.
+    const znaneOpisy = getDescriptionsByUrls(kandydaci.map((k) => k.href));
+    await uzupelnijZajawki(kandydaci, znaneOpisy);
+
+    for (const k of kandydaci) {
+      const { href, title, description, parsedDate } = k;
+
       // Wiekszosc wpisow ZWiK to biezace awarie (juz parsowane wyzej jako
       // published_at), ale czasem opis zapowiada konkretna, przyszla date
       // (np. planowany remont) - lapiemy ja tez jako event_date, zeby
@@ -154,7 +256,7 @@ async function fetchZwik() {
         console.warn(`[zwik] wpis oznaczony do przejrzenia (${title}):`, checked.review_reasons.join('; '));
       }
       results.push(checked);
-    });
+    }
   } catch (err) {
     console.error('[zwik] blad pobierania:', err.message);
   }

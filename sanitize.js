@@ -210,19 +210,22 @@ function safeSourceUrl(url) {
 // gubily koncowke, czyli najczesciej ostatnia linie autobusowa. Appka i tak
 // zwija dlugie opisy do trzech linijek z przyciskiem "pokaz wiecej", wiec
 // dluzszy opis nic nie psuje, a nie gubi informacji.
-const DESCRIPTION_LIMIT = 600;
+// Jeden limit dla WSZYSTKICH kategorii.
+//
+// Przez chwile byly dwa: 600 dla "prozy" i 2000 dla list adresow. Pierwszy
+// komunikat po wdrozeniu pokazal, ze ten podzial jest zmyslony - zgloszenie
+// ZDW "Budowa mostu w Pomorsku" ma 748 znakow i stracilo koncowke, czyli
+// dokladnie opis objazdu. Komunikat drogowy rowniez bywa wyliczanka ulic,
+// tylko zapisana zdaniami. Appka i tak zwija dlugi opis do trzech linijek
+// z przyciskiem "pokaz wiecej", wiec wyzszy limit nic nie psuje, a
+// kazdy nizszy coraz to komus urywa jego ulice.
+const DESCRIPTION_LIMIT = 2000;
 
 // Wyjatek dla komunikatow, ktorych trescia jest LISTA ADRESOW: wylaczenia
 // pradu (Enea) i przerwy w dostawie wody (ZWiK). Tam kazda pozycja to czyjs
 // dom. Ucieta lista nie wyglada na bledna - wyglada na krotsza - wiec nikt
 // nie zauwazy, ze zabraklo konca. A zabraknie go akurat przy najwiekszych
 // awariach, bo to one maja najdluzsze listy.
-const DESCRIPTION_LIMIT_LISTY = 2000;
-
-// Kategorie, w ktorych tresc komunikatu JEST lista: adresow (prad, woda)
-// albo linii autobusowych (mzk). Wszedzie tam urwanie konca znaczy, ze
-// ktos nie dowie sie o swojej ulicy albo o swojej linii.
-const KATEGORIE_Z_LISTAMI = new Set(['prad', 'wodociagi', 'mzk']);
 
 // Gorne ograniczenie dla SCRAPEROW. Zaden scraper nie ma prawa przycinac
 // tresci wlasnym, mniejszym limitem - od tego jest wylacznie ten plik,
@@ -238,8 +241,10 @@ const LIMIT_ZRODLA = 3000;
 
 const TITLE_LIMIT = 300;
 
-function limitOpisu(category) {
-  return KATEGORIE_Z_LISTAMI.has(category) ? DESCRIPTION_LIMIT_LISTY : DESCRIPTION_LIMIT;
+// Zostaje jako funkcja, zeby test mial czego pilnowac, a ewentualny przyszly
+// wyjatek dla jakiegos zrodla mial jedno, oczywiste miejsce.
+function limitOpisu() {
+  return DESCRIPTION_LIMIT;
 }
 
 // Przycina na granicy zdania albo punktu listy, nigdy w polowie slowa.

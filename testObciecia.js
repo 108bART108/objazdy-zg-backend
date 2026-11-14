@@ -43,6 +43,13 @@ const DOZWOLONE = {
   'qualityCheck.js': { 150: 'poczatek opisu do wykrywania boilerplate' },
   'sanitize.js': { 60: 'poczatek opisu do kontroli ucietego startu', 40: 'skrot w tresci ostrzezenia', 80: 'skrot adresu w ostrzezeniu' },
   'server.js': { 20: 'liczba kategorii w subskrypcji push' },
+  // Nie dotyczy tresci zapisywanej do bazy - to poczatek tekstu uzywany
+  // do DECYZJI (czy wpuscic artykul i do ktorej zakladki). Pelna tresc
+  // idzie do appki osobno i nie jest przez to w zaden sposob skracana.
+  'umZgora.js': { 400: 'poczatek tekstu do filtrowania i wyboru kategorii' },
+  // Fragment zajawki uzywany do sprawdzenia, czy tresc sciagnieta
+  // z podstrony pochodzi z tego samego komunikatu.
+  'zwik.js': { 40: 'poczatek zajawki do kontroli zgodnosci z podstrona' },
 };
 
 function skanujKod() {
@@ -153,15 +160,47 @@ function sprawdzLimity() {
   return bledy;
 }
 
+// --- 4. tresc nie moze byc przeinaczana --------------------------------------
+// qualityCheck rozdziela sklejone slowa ("brak wodyPrzerwa" -> "brak wody
+// Przerwa"). Robil to na kazdej granicy mala/wielka litera, wiec rozrywal
+// tez skroty z wielka litera w srodku - "ZWiK" zamienial sie w "ZWi K"
+// w niemal kazdym komunikacie wodociagow.
+const SKLEJKI = [
+  ['ZWiK informuje, że nastąpi przerwa.', 'ZWiK informuje, że nastąpi przerwa.'],
+  ['Spółka ZWiK Zielona Góra.', 'Spółka ZWiK Zielona Góra.'],
+  ['brak wodyPrzerwa w dostawie', 'brak wody Przerwa w dostawie'],
+  ['odpowiedzialnościąul. Chemiczna', 'odpowiedzialnością ul. Chemiczna'],
+];
+
+function sprawdzSklejki() {
+  const bledy = [];
+  const src = fs.readFileSync(path.join(__dirname, 'qualityCheck.js'), 'utf8');
+  const kod = src.match(/function fixGluedText[\s\S]*?\n}/);
+  if (!kod) {
+    bledy.push('nie znaleziono funkcji fixGluedText w qualityCheck.js');
+    return bledy;
+  }
+  // eslint-disable-next-line no-eval
+  const fixGluedText = eval(`(${kod[0].replace('function fixGluedText', 'function')})`);
+
+  for (const [wejscie, oczekiwane] of SKLEJKI) {
+    const wynik = fixGluedText(wejscie);
+    if (wynik !== oczekiwane) {
+      bledy.push(`sklejki: "${wejscie}" -> "${wynik}", oczekiwano "${oczekiwane}"`);
+    }
+  }
+  return bledy;
+}
+
 /**
  * Uruchamia wszystkie kontrole. Zwraca { sprawdzonych, bledy }.
  * Nie wypisuje niczego i nie konczy procesu - wola ja takze startupCheck.js.
  */
 function uruchomTesty() {
-  const bledy = [...skanujKod(), ...sprawdzLimity()];
+  const bledy = [...skanujKod(), ...sprawdzLimity(), ...sprawdzSklejki()];
   // 6 scraperow + 3 kategorie listowe + 4 kategorie przy przekroczeniu
-  // + 1 prawdziwy komunikat Enei
-  return { sprawdzonych: 14, bledy };
+  // + 1 prawdziwy komunikat Enei + 4 sklejki
+  return { sprawdzonych: 18, bledy };
 }
 
 if (require.main === module) {

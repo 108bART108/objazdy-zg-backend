@@ -147,19 +147,39 @@ async function fetchUmZgora() {
         // Ten sam artykul bywa w kanale tagowym i glownym - bierzemy raz.
         if (!item.link || widzianeAdresy.has(item.link)) continue;
 
-        const opis = (item.contentSnippet || '').slice(0, LIMIT_ZRODLA);
+        // WordPress wystawia w kanale DWIE wersje tresci:
+        //   <description>      -> zajawka, ucinana przez CMS i zakonczona "[...]"
+        //   <content:encoded>  -> CALY artykul
+        // rss-parser udostepnia je jako contentSnippet i content:encodedSnippet
+        // (oba juz bez znacznikow HTML). Braliśmy zajawke, przez co opisy
+        // w appce urywaly sie w polowie zdania na "[...]" - i zadne nasze
+        // limity nie mogly tego naprawic, bo tresc przychodzila juz ucieta.
+        // Pelna wersja nic nie kosztuje: jest w tej samej odpowiedzi.
+        const pelnaTresc = (item['content:encodedSnippet'] || '').trim();
+        const zajawka = (item.contentSnippet || '').trim();
+        const tresc = pelnaTresc.length > zajawka.length ? pelnaTresc : zajawka;
+        const opis = tresc.replace(/\s+/g, ' ').slice(0, LIMIT_ZRODLA);
+
+        // O tym, CZY wpuscic artykul i do KTOREJ zakladki trafi, decyduje
+        // dalej sam poczatek tekstu - tak jak wtedy, gdy mielismy wylacznie
+        // zajawke. Gdyby decydowala cala tresc, przypadkowe "awaria" czy
+        // "wodociag" w szostym akapicie artykulu o czyms innym zmienialoby
+        // kategorie albo wpuszczalo do appki tekst o koncercie, w ktorym
+        // raz pada slowo "remont". Pelna tresc sluzy do CZYTANIA, nie do
+        // klasyfikowania.
+        const poczatek = opis.slice(0, 400);
 
         // Kanal glowny zawiera cale zycie miasta: forum senioralne, koncerty,
         // swieta. Do appki o utrudnieniach wpuszczamy tylko to, co faktycznie
         // dotyczy ruchu, awarii lub przerw w dostawach.
-        if (feed.filtruj && !dotyczyUtrudnienia(item.title, opis)) {
+        if (feed.filtruj && !dotyczyUtrudnienia(item.title, poczatek)) {
           pominietych++;
           continue;
         }
 
         widzianeAdresy.add(item.link);
         dodanych++;
-        const text = `${item.title} ${item.contentSnippet || ''}`;
+        const text = `${item.title} ${poczatek}`;
         results.push({
           source_url: item.link,
           source_name: feed.name,
