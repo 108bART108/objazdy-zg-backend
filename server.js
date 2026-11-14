@@ -14,7 +14,7 @@ const {
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
 const { notifySubscribers, sendTestNotification, checkPushConfig } = require('./push');
-const { runWeeklyHealthCheck } = require('./healthcheck');
+const { runHealthCheck } = require('./healthcheck');
 const { sendSystemAlert } = require('./systemAlerts');
 const { runDailyAdCheck } = require('./adReminders');
 const { runStartupCheck } = require('./startupCheck');
@@ -281,7 +281,7 @@ app.post('/api/admin/test-push', async (req, res) => {
 app.post('/api/admin/healthcheck', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
-    await runWeeklyHealthCheck();
+    await runHealthCheck();
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -422,10 +422,17 @@ cron.schedule('0 9 * * *', async () => {
   }
 }, { timezone: 'Europe/Warsaw' });
 
-// Cotygodniowy automatyczny przeglad zdrowia appki - niedziela 15:30 (Warszawa)
-cron.schedule('30 15 * * 0', () => {
-  console.log('[cron] uruchamiam cotygodniowy przeglad...');
-  runWeeklyHealthCheck().catch((err) => console.error('[cron] blad przegladu:', err));
+// Codzienny automatyczny przeglad zdrowia appki - 6:40 (Warszawa).
+//
+// Byl tygodniowy (niedziela 15:30). Przy tygodniowym odstepie cichy blad
+// zrodla - np. zmiana ukladu strony, po ktorej scraper przestaje cokolwiek
+// wyciagac - moze wisiec siedem dni, zanim cokolwiek o nim powie.
+// Przeglad odpytuje na zywo wszystkie zrodla, wiec nie moze chodzic
+// czesciej niz raz na dobe; 6:40 daje wynik przed poczatkiem dnia,
+// a minuta inna niz pelna godzina omija szczyt zadan na serwerze.
+cron.schedule('40 6 * * *', () => {
+  console.log('[cron] uruchamiam codzienny przeglad...');
+  runHealthCheck().catch((err) => console.error('[cron] blad przegladu:', err));
 }, { timezone: 'Europe/Warsaw' });
 
 // Codzienne sprawdzenie reklam (wygasle -> wylacz, wygasajace za <=7 dni -> przypomnienie)

@@ -117,7 +117,7 @@ function runStartupCheck() {
   // try/catch: nawet jej calkowita awaria nie moze przeszkodzic
   // w starcie serwera ani zgubic wyniku kontroli spojnosci.
   try {
-    sprawdzTresc();
+    zglosTresc();
   } catch (err) {
     console.error('[start] kontrola tresci nie wykonala sie:', err.message);
   }
@@ -168,6 +168,15 @@ function sprawdzTresc() {
     }
   }
 
+  return { sprawdzonych, problemy };
+}
+
+// Wypisuje wynik kontroli tresci. Oddzielone od samego sprawdzania, bo
+// z tych samych testow korzysta rowniez codzienny przeglad (healthcheck.js),
+// ktory potrzebuje WYNIKU, a nie wpisu w logach.
+function zglosTresc() {
+  const { sprawdzonych, problemy } = sprawdzTresc();
+
   if (!problemy.length) {
     console.log(`[start] kontrola tresci: OK (${sprawdzonych} przypadkow)`);
     return problemy;
@@ -200,4 +209,4 @@ function zglos(problemy) {
   console.error('');
 }
 
-module.exports = { runStartupCheck };
+module.exports = { runStartupCheck, sprawdzTresc };

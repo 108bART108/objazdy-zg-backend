@@ -13,8 +13,8 @@ const webpush = require('web-push');
 // ORAZ czy daty publikacji wygladaja na prawdziwe (patrz checkDateSanity
 // ponizej). Wynik trafia do logow Render ORAZ jako powiadomienie push
 // do subskrybenta "systemowego".
-async function runWeeklyHealthCheck() {
-  console.log('[healthcheck] start cotygodniowego przegladu...');
+async function runHealthCheck() {
+  console.log('[healthcheck] start codziennego przegladu...');
   const lines = [];
   let hasProblem = false;
 
@@ -59,6 +59,14 @@ async function runWeeklyHealthCheck() {
   const factCoverage = checkCiekawostkaCoverage();
   lines.push(...factCoverage.lines);
   if (factCoverage.hasProblem) hasProblem = true;
+
+  const freshness = checkSwiezoscKategorii();
+  lines.push(...freshness.lines);
+  if (freshness.hasProblem) hasProblem = true;
+
+  const kodOk = checkTestyKodu();
+  lines.push(...kodOk.lines);
+  if (kodOk.hasProblem) hasProblem = true;
 
   const report = lines.join('\n');
   console.log(`[healthcheck] wynik:\n${report}`);
@@ -175,7 +183,91 @@ function checkCiekawostkaCoverage() {
   return { lines, hasProblem: true };
 }
 
+// Ile godzin bez nowego wpisu uznajemy za normalne. Kategorie roznia sie
+// tempem: drogi i prad maja cos niemal codziennie, MZK potrafi milczec
+// tygodniami, bo komunikaty komunikacji pojawiaja sie rzadziej.
+const PROGI_SWIEZOSCI_H = {
+  drogi: 96,
+  prad: 96,
+  wodociagi: 168,
+  mzk: 720,
+};
+
+// Odpowiada na pytanie "czy kazda zakladka w appce ma zywa tresc".
+// Sam fakt, ze scraper cos zwrocil, nie wystarcza - wpis moze byc sprzed
+// pol roku, a zakladka wygladac na dzialajaca.
+function checkSwiezoscKategorii() {
+  const rows = db.prepare(`
+    SELECT category,
+           COUNT(*) AS ile,
+           MAX(COALESCE(published_at, fetched_at)) AS najnowszy
+    FROM utrudnienia
+    WHERE active = 1 AND needs_review = 0
+    GROUP BY category
+  `).all();
+
+  const lines = [];
+  let hasProblem = false;
+  const znalezione = new Map(rows.map((r) => [r.category, r]));
+
+  for (const kategoria of Object.keys(PROGI_SWIEZOSCI_H)) {
+    const row = znalezione.get(kategoria);
+    if (!row || !row.ile) {
+      lines.push(`❌ ${kategoria}: BRAK aktywnych wpisow`);
+      hasProblem = true;
+      continue;
+    }
+
+    const wiekH = row.najnowszy
+      ? Math.round((Date.now() - new Date(row.najnowszy).getTime()) / 3600000)
+      : null;
+    const prog = PROGI_SWIEZOSCI_H[kategoria];
+
+    if (wiekH === null) {
+      lines.push(`⚠️ ${kategoria}: ${row.ile} wpisow, nieznana data najnowszego`);
+      hasProblem = true;
+    } else if (wiekH > prog) {
+      lines.push(`⚠️ ${kategoria}: ${row.ile} wpisow, najnowszy sprzed ${wiekH} godz. (prog ${prog})`);
+      hasProblem = true;
+    } else {
+      lines.push(`✅ ${kategoria}: ${row.ile} wpisow, najnowszy sprzed ${wiekH} godz.`);
+    }
+  }
+
+  return { lines, hasProblem };
+}
+
+// Te same zestawy przypadkow, ktore chodza przy starcie serwera. Miedzy
+// wdrozeniami kod sie nie zmienia, wiec ich codzienne uruchomienie jest
+// przede wszystkim potwierdzeniem, ze wersja na serwerze jest ta, ktora
+// przeszla testy - i wychwyci sytuacje, w ktorej na serwer trafil komplet
+// plikow bez jednego z nich.
+function checkTestyKodu() {
+  try {
+    const { sprawdzTresc } = require('./startupCheck');
+    const { sprawdzonych, problemy } = sprawdzTresc();
+    if (!problemy.length) {
+      return { lines: [`✅ Testy kodu: ${sprawdzonych} przypadkow bez bledu`], hasProblem: false };
+    }
+    return {
+      lines: [`❌ Testy kodu: ${problemy.length} bledow`, ...problemy.map((p) => `   • ${p}`)],
+      hasProblem: true,
+    };
+  } catch (err) {
+    return { lines: [`❌ Testy kodu nie wykonaly sie: ${err.message}`], hasProblem: true };
+  }
+}
+
 async function sendReportToSystemSubscribers(report, hasProblem) {
+  // Raport chodzi CODZIENNIE, wiec powiadomienie o tym, ze wszystko gra,
+  // byloby codziennym dzwonkiem bez tresci - a po tygodniu przestaje sie
+  // je czytac. Push idzie wylacznie przy problemie; pelny raport i tak
+  // zawsze laduje w logach Render.
+  if (!hasProblem) {
+    console.log('[healthcheck] bez problemow - nie wysylam powiadomienia');
+    return;
+  }
+
   if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
     console.warn('[healthcheck] brak kluczy VAPID - nie wysylam raportu push');
     return;
@@ -188,7 +280,7 @@ async function sendReportToSystemSubscribers(report, hasProblem) {
     return;
   }
 
-  const title = hasProblem ? '⚠️ Raport appki: wykryto problem' : '✅ Raport appki: wszystko OK';
+  const title = '⚠️ Raport appki: wykryto problem';
   const payload = JSON.stringify({
     title,
     body: report.slice(0, 180),
@@ -204,4 +296,4 @@ async function sendReportToSystemSubscribers(report, hasProblem) {
   }
 }
 
-module.exports = { runWeeklyHealthCheck };
+module.exports = { runHealthCheck };
