@@ -2,6 +2,7 @@ const cheerio = require('cheerio');
 const crypto = require('crypto');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
+const { LIMIT_ZRODLA } = require('./sanitize');
 
 const PAGE_URL = 'https://www.zdw.zgora.pl/utrudnienia/';
 
@@ -33,7 +34,7 @@ async function fetchZdw() {
 
       const opisMatch = fullText.match(/opis:\s*\|?\s*(.+)$/i);
       let description = opisMatch ? opisMatch[1] : fullText;
-      description = description.replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+      description = description.replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ').trim().slice(0, LIMIT_ZRODLA);
       if (!description) return;
 
       // Pole "od dnia:" trafia do OBU pol: published_at ORAZ event_date.

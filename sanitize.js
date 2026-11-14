@@ -212,6 +212,36 @@ function safeSourceUrl(url) {
 // dluzszy opis nic nie psuje, a nie gubi informacji.
 const DESCRIPTION_LIMIT = 600;
 
+// Wyjatek dla komunikatow, ktorych trescia jest LISTA ADRESOW: wylaczenia
+// pradu (Enea) i przerwy w dostawie wody (ZWiK). Tam kazda pozycja to czyjs
+// dom. Ucieta lista nie wyglada na bledna - wyglada na krotsza - wiec nikt
+// nie zauwazy, ze zabraklo konca. A zabraknie go akurat przy najwiekszych
+// awariach, bo to one maja najdluzsze listy.
+const DESCRIPTION_LIMIT_LISTY = 2000;
+
+// Kategorie, w ktorych tresc komunikatu JEST lista: adresow (prad, woda)
+// albo linii autobusowych (mzk). Wszedzie tam urwanie konca znaczy, ze
+// ktos nie dowie sie o swojej ulicy albo o swojej linii.
+const KATEGORIE_Z_LISTAMI = new Set(['prad', 'wodociagi', 'mzk']);
+
+// Gorne ograniczenie dla SCRAPEROW. Zaden scraper nie ma prawa przycinac
+// tresci wlasnym, mniejszym limitem - od tego jest wylacznie ten plik,
+// ktory przycina swiadomie, na granicy zdania i z wpisem do logow.
+// Scraper moze tylko zabezpieczyc sie przed zupelnie zepsuta strona,
+// i do tego sluzy ta wartosc.
+//
+// POWOD: do 14.11.2026 kazdy scraper mial wlasne .slice(0, 400). Opisy
+// byly wiec ucinane DWA razy - najpierw po cichu u zrodla, potem (juz
+// bez efektu) tutaj. Komunikat Enei o wylaczeniu pradu z lista
+// kilkunastu ulic tracil polowe adresow i nic tego nie sygnalizowalo.
+const LIMIT_ZRODLA = 3000;
+
+const TITLE_LIMIT = 300;
+
+function limitOpisu(category) {
+  return KATEGORIE_Z_LISTAMI.has(category) ? DESCRIPTION_LIMIT_LISTY : DESCRIPTION_LIMIT;
+}
+
 // Przycina na granicy zdania albo punktu listy, nigdy w polowie slowa.
 // Twarde slice() zostawialo urwane wyrazy w rodzaju "bedzie kursow".
 function trimToSentence(text, limit) {
@@ -219,8 +249,13 @@ function trimToSentence(text, limit) {
   const cut = text.slice(0, limit);
   const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('; '));
   if (lastStop > limit * 0.5) return cut.slice(0, lastStop + 1).trim();
-  const lastSpace = cut.lastIndexOf(' ');
-  return `${cut.slice(0, lastSpace > 0 ? lastSpace : limit).trim()}...`;
+
+  // Wielokropek doklejany byl DO juz przycietego tekstu, wiec wynik potrafil
+  // wyjsc o 1-3 znaki ponad limit. Rezerwujemy na niego miejsce z gory -
+  // limit ma znaczyc limit, inaczej nie da sie o nim niczego twierdzic.
+  const zZapasem = text.slice(0, Math.max(0, limit - 3));
+  const lastSpace = zZapasem.lastIndexOf(' ');
+  return `${zZapasem.slice(0, lastSpace > 0 ? lastSpace : zZapasem.length).trim()}...`;
 }
 
 /**
@@ -232,14 +267,32 @@ function sanitizeItems(rawItems) {
   const warnings = [];
 
   for (const raw of rawItems) {
+    const oczyszczonyOpis = cleanText(raw.description);
+    const oczyszczonyTytul = cleanTitle(raw.title);
+    const limit = limitOpisu(raw.category);
+
     const item = {
       ...raw,
-      title: cleanTitle(raw.title).slice(0, 300),
-      description: trimToSentence(cleanText(raw.description), DESCRIPTION_LIMIT),
+      title: oczyszczonyTytul.slice(0, TITLE_LIMIT),
+      description: trimToSentence(oczyszczonyOpis, limit),
       source_url: safeSourceUrl(raw.source_url),
     };
 
     const problems = scanItem(item);
+
+    if (oczyszczonyTytul.length > TITLE_LIMIT) {
+      problems.push(`tytul PRZYCIETY z ${oczyszczonyTytul.length} do ${TITLE_LIMIT} zn.`);
+    }
+
+    // Przyciecie nie moze byc ciche. Do tej pory opis po prostu sie konczyl
+    // i nie bylo zadnego sladu, ze cos obcielismy - a przy liscie ulic
+    // znaczy to, ze czyjegos adresu zabraklo w komunikacie.
+    if (oczyszczonyOpis.length > limit) {
+      problems.push(
+        `opis PRZYCIETY z ${oczyszczonyOpis.length} do ${item.description.length} zn. `
+        + `(limit dla kategorii "${raw.category || '-'}": ${limit}) - koncowka nie trafila do appki`,
+      );
+    }
     if (problems.length) {
       warnings.push({
         source_name: item.source_name || 'nieznane zrodlo',
@@ -269,4 +322,16 @@ function sanitizeItems(rawItems) {
 // zanim siegnie po opis zapisany wczesniej w bazie, sprawdza, czy ten opis
 // nie jest przypadkiem uciety. Bez tego raz zle pobrany opis zostawalby
 // w bazie na zawsze - cache nie mial pojecia o jakosci tego, co trzyma.
-module.exports = { cleanText, cleanTitle, scanItem, scanTruncatedStart, sanitizeItems };
+module.exports = {
+  cleanText,
+  cleanTitle,
+  scanItem,
+  scanTruncatedStart,
+  sanitizeItems,
+  // Dla scraperow: jedyna dozwolona wartosc wlasnego zabezpieczenia
+  // dlugosci. Wszystkie korzystaja z tej samej stalej, zeby nie dalo sie
+  // znowu wpisac gdzies po cichu wlasnego, mniejszego limitu.
+  LIMIT_ZRODLA,
+  // Dla testu, ktory pilnuje, ze zadne zrodlo nie tnie ponizej tych progow.
+  limitOpisu,
+};

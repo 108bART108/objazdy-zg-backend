@@ -1,5 +1,6 @@
 const cheerio = require('cheerio');
 const { detectCategory, extractStreet } = require('./classify');
+const { LIMIT_ZRODLA } = require('./sanitize');
 
 // Generyczny mechanizm - obecnie bez zadnego zrodla. ZDW i MZK maja teraz
 // wlasne, dedykowane scrapery (zdw.js, mzk.js) dopasowane do ich
@@ -30,7 +31,7 @@ async function fetchOne(source) {
         link = `${base.origin}${link}`;
       }
 
-      const description = $el.find(source.descSelector).first().text().trim().slice(0, 400);
+      const description = $el.find(source.descSelector).first().text().trim().slice(0, LIMIT_ZRODLA);
 
       // Pomijamy wpisy bez opisu - to zwykle nawigacja/naglowek strony
       // zlapany przez zbyt szeroki selektor, a nie prawdziwe zgloszenie

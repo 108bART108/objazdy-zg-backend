@@ -1,6 +1,6 @@
 const cheerio = require('cheerio');
 const { getDescriptionsByUrls, getSetting, setSetting, deactivateByUrls } = require('./db');
-const { scanTruncatedStart } = require('./sanitize');
+const { scanTruncatedStart, LIMIT_ZRODLA } = require('./sanitize');
 
 // Ile razy probujemy odzyskac opis, ktory w bazie wyglada na uciety.
 // Licznik zyje tylko w pamieci procesu - po restarcie zaczynamy od nowa,
@@ -8,11 +8,20 @@ const { scanTruncatedStart } = require('./sanitize');
 const naprawyOpisu = new Map();
 const MAX_PROB_NAPRAWY = 3;
 
-// Ile tresci zbieramy z artykulu. sanitize.js i tak przytnie opis na granicy
-// zdania do 600 znakow - zbieramy odrobine wiecej, zeby mial z czego ciac,
-// i twardo zatrzymujemy sie przy 900, zeby nie wciagnac calej strony.
-const LIMIT_ZBIERANIA = 700;
-const LIMIT_TWARDY = 900;
+// Ile najnowszych artykulow MZK przetwarzamy w jednym cyklu.
+const MAX_ARTYKULOW = 15;
+
+// Ile tresci zbieramy z artykulu. Komunikat MZK to lista zmian dla
+// poszczegolnych linii - urwanie konca znaczy, ze ktos nie dowie sie
+// o swojej linii. Dlatego zbieramy az do limitu, ktory sanitize.js
+// przewiduje dla kategorii listowych (2000 zn.), z niewielkim zapasem,
+// zeby mial na czym przyciac na granicy zdania.
+//
+// Dawne 700/900 bylo pozostaloscia po czasach, gdy limit dla MZK wynosil
+// 600 znakow. Komunikat o ul. Zacisze ma 543 znaki i miescil sie o wlos -
+// dluzszy gubilby ostatnie linie autobusowe.
+const LIMIT_ZBIERANIA = 2100;
+const LIMIT_TWARDY = LIMIT_ZRODLA;
 
 // Ile artykulow naprawiamy w jednym cyklu. MZK pobieramy przez darmowego
 // posrednika z limitami zapytan, wiec naprawy musza byc kroplowe.
@@ -652,7 +661,13 @@ async function fetchMzk() {
       return results;
     }
 
-    const limited = articles.slice(0, 15);
+    // Przetwarzamy najnowsze MAX_ARTYKULOW. Gdyby MZK kiedys opublikowalo
+    // ich wiecej naraz, starsze wypadlyby poza liste - po cichu, bo nic
+    // tego nie sygnalizowalo. Teraz zostawiamy slad w logach.
+    if (articles.length > MAX_ARTYKULOW) {
+      console.warn(`[mzk] strona ma ${articles.length} artykulow, bierzemy ${MAX_ARTYKULOW} najnowszych - ${articles.length - MAX_ARTYKULOW} pominieto`);
+    }
+    const limited = articles.slice(0, MAX_ARTYKULOW);
 
     // Opis artykulu pobieramy TYLKO wtedy, gdy jeszcze go nie mamy.
     //

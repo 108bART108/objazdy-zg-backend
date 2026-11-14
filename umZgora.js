@@ -7,6 +7,7 @@ const Parser = require('rss-parser');
 const parser = new Parser();
 const { detectCategory, extractStreet } = require('./classify');
 const { sendSystemAlert } = require('./systemAlerts');
+const { LIMIT_ZRODLA } = require('./sanitize');
 
 // DWA RODZAJE KANALOW, celowo:
 //
@@ -146,7 +147,7 @@ async function fetchUmZgora() {
         // Ten sam artykul bywa w kanale tagowym i glownym - bierzemy raz.
         if (!item.link || widzianeAdresy.has(item.link)) continue;
 
-        const opis = (item.contentSnippet || '').slice(0, 400);
+        const opis = (item.contentSnippet || '').slice(0, LIMIT_ZRODLA);
 
         // Kanal glowny zawiera cale zycie miasta: forum senioralne, koncerty,
         // swieta. Do appki o utrudnieniach wpuszczamy tylko to, co faktycznie

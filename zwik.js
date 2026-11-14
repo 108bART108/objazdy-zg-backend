@@ -2,6 +2,7 @@ const cheerio = require('cheerio');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
 const { extractPolishDate } = require('./polishDates');
+const { LIMIT_ZRODLA } = require('./sanitize');
 
 // ZWiK publikuje na jednej stronie DWIE rozne rzeczy:
 //  1. przerwy w dostawie wody ("nie bedzie wody na ul. X") - zakladka "woda",
@@ -130,7 +131,7 @@ async function fetchZwik() {
         .replace(/^\s*(Dzisiaj|Wczoraj|\d{1,2}\s+\p{L}+)\s+o\s+\d{2}:\d{2}\s*/iu, '')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 400);
+        .slice(0, LIMIT_ZRODLA);
       if (!description) return;
 
       // Wiekszosc wpisow ZWiK to biezace awarie (juz parsowane wyzej jako

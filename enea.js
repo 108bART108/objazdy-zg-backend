@@ -2,8 +2,18 @@ const cheerio = require('cheerio');
 const crypto = require('crypto');
 const { extractStreet } = require('./classify');
 const { qualityCheck } = require('./qualityCheck');
+const { LIMIT_ZRODLA } = require('./sanitize');
 
 const URL = 'https://wylaczenia.operator.enea.pl/index.php?rejon=1';
+
+// Ile elementow pod naglowkiem obszaru zbieramy, zanim uznamy, ze cos jest
+// nie tak ze strona. Petla i tak zatrzymuje sie na nastepnym <h4>.
+const MAX_ELEMENTOW_OBSZARU = 40;
+
+// Gorne ograniczenie dlugosci opisu - zabezpieczenie przed zepsuta strona,
+// a nie sposob na skracanie listy ulic. Wlasciwy limit nakłada sanitize.js
+// i robi to z ostrzezeniem w logach.
+const LIMIT_TWARDY_OPISU = LIMIT_ZRODLA;
 
 const MONTH_FULL = {
   stycznia: 0, lutego: 1, marca: 2, kwietnia: 3, maja: 4, czerwca: 5,
@@ -37,16 +47,33 @@ async function fetchEnea() {
       const title = $h4.text().trim();
       if (!title || !/^obszar\s/i.test(title)) return;
 
+      // Zbieramy wszystko az do nastepnego naglowka obszaru. Dawny limit
+      // 10 elementow byl cichy: gdyby Enea rozbila dluzsza liste ulic na
+      // wiecej akapitow, koncowka znikalaby bez sladu. Petla i tak konczy
+      // sie na kolejnym <h4>, wiec wyzszy limit niczego nie psuje, a
+      // przekroczenie go zglaszamy.
       const parts = [];
       let $next = $h4.next();
       let guard = 0;
-      while ($next.length && !$next.is('h4') && guard < 10) {
+      while ($next.length && !$next.is('h4') && guard < MAX_ELEMENTOW_OBSZARU) {
         const t = $next.text().trim();
         if (t) parts.push(t);
         $next = $next.next();
         guard++;
       }
-      const description = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+      if (guard >= MAX_ELEMENTOW_OBSZARU) {
+        console.warn(`[enea] UWAGA: "${title}" ma co najmniej ${MAX_ELEMENTOW_OBSZARU} elementow - lista ulic moze byc niepelna`);
+      }
+
+      // Opisu NIE przycinamy tu do 400 znakow, jak dawniej. Komunikat Enei
+      // to lista adresow - kazda pozycja to czyjs dom, a ucieta lista
+      // wyglada po prostu na krotsza, wiec nikt nie zauwazy braku. Dodatkowo
+      // obciete opisy trafialy potem do odsiewacza duplikatow, ktory
+      // porownuje tresc: dwa rozne wylaczenia, ktore roznia sie dopiero
+      // za 400. znakiem, zlewaly sie w jedno i jedno z nich bylo cicho
+      // dezaktywowane. Gorne ograniczenie zostaje, ale wysokie - a wlasciwe
+      // przyciecie (z ostrzezeniem w logach) robi sanitize.js.
+      const description = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, LIMIT_TWARDY_OPISU);
       if (!description) return;
 
       // Data zaplanowanego wylaczenia idzie do event_date (uzywana do
