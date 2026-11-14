@@ -10,6 +10,11 @@ const { notifySubscribers } = require('./push');
 const { qualityCheck } = require('./qualityCheck');
 const { sanitizeItems } = require('./sanitize');
 
+// Tresc ostrzezen sanitize juz wypisanych w tym procesie - zeby nie
+// powtarzac ich co cykl. Restart serwera czysci liste, wiec po kazdym
+// wdrozeniu dostajesz pelny, aktualny obraz.
+const zgloszoneOstrzezenia = new Set();
+
 // Normalizuje tekst do porownania "czy to ta sama tresc" - male litery,
 // pojedyncze spacje, bez koncowej interpunkcji. Dzieki temu dwa wpisy
 // rozne tylko o niewidoczna spacje/znak bialy (np. zrodlo publikuje ten
@@ -194,11 +199,18 @@ async function scrapeAll() {
     [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk, ...fromZwik, ...fromZdw],
   );
 
+  // Kazde ostrzezenie wypisujemy RAZ na uruchomienie serwera, a nie co cykl.
+  //
+  // Scraper chodzi co 10 minut, a komunikat zrodla potrafi wisiec tygodniami.
+  // Szesc dlugich artykulow miasta dawalo 36 linii na godzine, zawsze tych
+  // samych - i w takim szumie nowe, prawdziwe ostrzezenie przestaje byc
+  // widoczne. A caly sens tych linii polega na tym, zeby bylo widac.
   for (const ostrzezenie of ostrzezeniaTresci) {
-    console.warn(
-      `[sanitize] ${ostrzezenie.source_name} [${ostrzezenie.category}] `
-      + `"${ostrzezenie.title}": ${ostrzezenie.problems.join('; ')}`,
-    );
+    const tresc = `[sanitize] ${ostrzezenie.source_name} [${ostrzezenie.category}] `
+      + `"${ostrzezenie.title}": ${ostrzezenie.problems.join('; ')}`;
+    if (zgloszoneOstrzezenia.has(tresc)) continue;
+    zgloszoneOstrzezenia.add(tresc);
+    console.warn(tresc);
   }
 
   const rawItems = oczyszczone

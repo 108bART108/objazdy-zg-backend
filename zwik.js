@@ -118,7 +118,11 @@ function wyciagTrescPodstrony(html) {
   const czesci = [];
   $najlepszy.find('p, li').each((_, el) => {
     const t = $(el).text().replace(/\s+/g, ' ').trim();
-    if (t) czesci.push(t);
+    // Te same etykiety co na liscie komunikatow - na podstronie rowniez
+    // potrafia stac w osobnym akapicie i wchodzic na koniec opisu
+    // ("...przepraszamy! Awarie i remonty").
+    const smiec = !t || NOISE_TEXTS.some((n) => t.toLowerCase() === n || t.toLowerCase().startsWith(n));
+    if (!smiec) czesci.push(t);
   });
   return czesci.join(' ').replace(/\s+/g, ' ').trim();
 }
@@ -155,9 +159,21 @@ async function uzupelnijZajawki(kandydaci, znaneOpisy) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const pelny = wyciagTrescPodstrony(await res.text());
 
-      const poczatek = k.description.replace(KONCOWKA_URWANIA_RE, '').trim().slice(0, 40);
-      const pasuje = poczatek.length >= 20
-        && pelny.toLowerCase().includes(poczatek.toLowerCase());
+      // Sprawdzamy POCZATEK albo KONIEC zajawki - wystarczy jedno.
+      //
+      // Sam poczatek nie wystarczyl: zajawka komunikatu "Utrudnienia w ruchu
+      // na al. Konstytucji 3 Maja" zaczynala sie od etykiety listy
+      // (", Wiadomosci Informujemy, ze..."), ktorej na podstronie nie ma -
+      // wiec kontrola odrzucala poprawnie pobrana tresc. Koncowka zajawki
+      // to zawsze prawdziwy tekst komunikatu, wiec jest lepszym punktem
+      // zaczepienia; pierwsze, uciete slowo odrzucamy.
+      const zajawka = k.description.replace(KONCOWKA_URWANIA_RE, '').trim();
+      const poczatek = zajawka.slice(0, 40);
+      const koniec = zajawka.slice(-45).replace(/^\S*\s/, '').trim();
+
+      const zawiera = (fragment) => fragment.length >= 20
+        && pelny.toLowerCase().includes(fragment.toLowerCase());
+      const pasuje = zawiera(poczatek) || zawiera(koniec);
 
       if (pelny && pelny.length > k.description.length && !wygladaNaZajawke(pelny) && pasuje) {
         console.log(`[zwik] uzupelniono uciety opis z podstrony (${k.description.length} -> ${pelny.length} zn.): "${k.title}"`);

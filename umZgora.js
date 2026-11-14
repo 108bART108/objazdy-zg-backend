@@ -158,7 +158,18 @@ async function fetchUmZgora() {
         const pelnaTresc = (item['content:encodedSnippet'] || '').trim();
         const zajawka = (item.contentSnippet || '').trim();
         const tresc = pelnaTresc.length > zajawka.length ? pelnaTresc : zajawka;
-        const opis = tresc.replace(/\s+/g, ' ').slice(0, LIMIT_ZRODLA);
+        // Pelna tresc artykulu konczy sie redakcyjna stopka: inicjalami
+        // autora i podpisem zdjecia, czasem z powtorzonym leadem
+        // ("... (rk) Fot. Wladyslaw Czulak/Pod koniec pazdziernika...").
+        // Dla mieszkanca to szum, wiec ucinamy go od miejsca, w ktorym
+        // sie zaczyna. Wzorzec jest celowo waski - wymaga pary
+        // "(inicjaly) Fot." albo samych inicjalow na samym koncu.
+        const opis = tresc
+          .replace(/\s+/g, ' ')
+          .replace(/\s*\([a-ząćęłńóśźż]{2,4}\)\s*Fot\..*$/i, '')
+          .replace(/\s*\([a-ząćęłńóśźż]{2,4}\)\s*$/i, '')
+          .trim()
+          .slice(0, LIMIT_ZRODLA);
 
         // O tym, CZY wpuscic artykul i do KTOREJ zakladki trafi, decyduje
         // dalej sam poczatek tekstu - tak jak wtedy, gdy mielismy wylacznie
