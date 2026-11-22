@@ -158,6 +158,9 @@ const REGULA_TRESCI_ZRODLA = ['PZZD Gorzykowo'];
 // Dokladnie tego brakowalo, gdy regula zabrala 14 wpisow Enei za jednym razem.
 const MAX_UKRYTYCH_REGULA_TRESCI = 3;
 
+// Tresc ostrzezen bezpiecznika juz wypisanych w tym procesie.
+const zgloszoneBezpieczniki = new Set();
+
 /**
  * Dezaktywuje wpisy, ktore sa tym samym komunikatem zapisanym dwa razy pod
  * roznymi source_url. Zostaje wpis z najnizszym id (odkryty pierwszy),
@@ -238,9 +241,21 @@ function wskazDuplikaty(rows) {
 
   // Bezpiecznik: lepiej pokazac duplikat niz schowac ostrzezenia.
   if (zRegulyTresci.length > MAX_UKRYTYCH_REGULA_TRESCI) {
-    console.warn(`[db] UWAGA: regula "ta sama tresc pod innym tytulem" chciala ukryc `
+    // Wypisujemy TYTULY, nie tylko liczbe. Sucha liczba "chciala ukryc 5"
+    // nie mowi nic poza tym, ze cos jest nie tak - a zeby to naprawic, trzeba
+    // wiedziec KTORE wpisy maja wspolna tresc. Bez tego zostaje zgadywanie.
+    const opis = zRegulyTresci.map((d) => `"${d.title}"`).join(', ');
+    const tresc = `[db] UWAGA: regula "ta sama tresc pod innym tytulem" chciala ukryc `
       + `${zRegulyTresci.length} wpisow (limit ${MAX_UKRYTYCH_REGULA_TRESCI}) - NIE ukrywam zadnego. `
-      + 'Tyle naraz znaczy, ze regula sie myli, a nie ze zrodlo sie powtarza.');
+      + `Tyle naraz znaczy, ze regula sie myli, a nie ze zrodlo sie powtarza. Chodzilo o: ${opis}`;
+
+    // Raz na uruchomienie serwera, a nie co dziesiec minut - inaczej to
+    // ostrzezenie zaglusza wszystko inne w logu, a tak samo jak przy
+    // [sanitize] caly jego sens polega na tym, zeby bylo widac.
+    if (!zgloszoneBezpieczniki.has(tresc)) {
+      zgloszoneBezpieczniki.add(tresc);
+      console.warn(tresc);
+    }
     return duplikaty;
   }
 
