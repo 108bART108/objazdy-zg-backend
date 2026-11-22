@@ -129,33 +129,102 @@ try {
   console.error('[db] blad jednorazowej naprawy dat:', err.message);
 }
 
-// Jednorazowe posprzatanie juz istniejacych duplikatow tresci (ten sam
-// tytul+opis w tej samej kategorii zapisany jako dwa osobne wiersze -
-// zwykle efekt tego, ze zrodlo publikuje ten sam komunikat dwa razy
-// z drobna, niewidoczna roznica w otaczajacym tekscie, przez co dwa
-// wpisy dostaly rozne source_url/hash). Zostaje wpis z najnizszym id
-// (czyli odkryty jako pierwszy), reszta zostaje dezaktywowana (nie
-// usuwana - zeby nie stracic historii/source_url na wszelki wypadek).
-try {
+// Ponizej jakiej dlugosci opisu NIE wolno uznawac dwoch wpisow za ten sam
+// komunikat tylko dlatego, ze maja identyczny opis. Krotki opis to zwykle
+// powtorzony tytul (tak dziala awaryjne "opis = tytul"), a dwa rozne
+// zamkniecia drog moga miec przypadkiem takie samo krotkie zdanie.
+// Identyczny DLUGI tekst to natomiast pewny znak, ze to jedno zawiadomienie.
+const MIN_OPIS_DUPLIKATU = 200;
+
+/**
+ * Dezaktywuje wpisy, ktore sa tym samym komunikatem zapisanym dwa razy pod
+ * roznymi source_url. Zostaje wpis z najnizszym id (odkryty pierwszy),
+ * reszta dostaje active = 0 - nie usuwamy, zeby nie stracic historii.
+ *
+ * Dwie reguly:
+ *
+ *  1. Ten sam tytul I opis w tej samej kategorii. Tak wyglada typowy
+ *     przypadek, gdy zrodlo publikuje komunikat dwa razy z niewidoczna
+ *     roznica w otaczajacym tekscie, przez co powstaja dwa source_url.
+ *
+ *  2. Ten sam DLUGI opis w tym samym zrodle i kategorii, ale pod INNYM
+ *     tytulem. Tej reguly dotad nie bylo i dlatego 22.11.2026 PZZD wstawil
+ *     do appki dwa razy to samo zamkniecie drogi 1189F w Karszynie - raz
+ *     jako "Zamkniecie drogi powiatowej 1189F w m. Karszyn", raz jako
+ *     "ZAMKNIECIE DROGI POWIATOWEJ NR 1189F W M. KARSZYN 25.08.2026 r.-
+ *     26.08.2026r.". Oba wpisy mialy identyczna tresc (566 znakow), ale
+ *     rozne tytuly, wiec klucz z reguly 1 ich nie zlapal. Dla czytelnika
+ *     to byl po prostu ten sam komunikat dwa razy pod rzad.
+ *     Zawezamy regule do jednego zrodla, zeby nie wyciszyc sytuacji, w
+ *     ktorej dwie instytucje niezaleznie informuja o tym samym - to jest
+ *     cenna informacja, nie duplikat.
+ *
+ * Wolamy to przy starcie ORAZ po kazdym cyklu scrapowania. Upsert ustawia
+ * active = 1, wiec dezaktywowany duplikat wraca na chwile przy kazdym
+ * cyklu - i dlatego sprzatanie musi iss PO zapisie, a nie tylko raz.
+ */
+function dezaktywujDuplikatyTresci() {
+  const rows = db.prepare(
+    'SELECT id, source_name, category, title, description FROM utrudnienia WHERE active = 1 ORDER BY id',
+  ).all();
+
+  const duplikaty = wskazDuplikaty(rows);
+  if (!duplikaty.length) return { zdezaktywowanych: 0, szczegoly: [] };
+
+  const placeholders = duplikaty.map(() => '?').join(',');
+  db.prepare(`UPDATE utrudnienia SET active = 0 WHERE id IN (${placeholders})`)
+    .run(...duplikaty.map((d) => d.id));
+
+  return { zdezaktywowanych: duplikaty.length, szczegoly: duplikaty };
+}
+
+/**
+ * Sama decyzja "ktore wiersze sa duplikatami" - bez bazy, zeby dala sie
+ * sprawdzic testem przy starcie serwera i w codziennym przegladzie.
+ * Wiersze musza przyjsc posortowane po id rosnaco: zostaje pierwszy.
+ */
+function wskazDuplikaty(rows) {
   const normalize = (t) => (t || '').toLowerCase().replace(/\s+/g, ' ').replace(/[.,;:…]+$/, '').trim();
-  const rows = db.prepare('SELECT id, category, title, description FROM utrudnienia WHERE active = 1').all();
-  const seen = new Map();
-  const duplicateIds = [];
+
+  const poTytuleIOpisie = new Map();
+  const poDlugimOpisie = new Map();
+  const duplikaty = [];
+
   for (const row of rows) {
-    const key = `${row.category}||${normalize(row.title)}||${normalize(row.description)}`;
-    if (seen.has(key)) {
-      duplicateIds.push(row.id);
-    } else {
-      seen.set(key, row.id);
+    const tytul = normalize(row.title);
+    const opis = normalize(row.description);
+
+    const klucz1 = `${row.category}||${tytul}||${opis}`;
+    if (poTytuleIOpisie.has(klucz1)) {
+      duplikaty.push({ id: row.id, title: row.title, regula: 'ten sam tytul i opis' });
+      continue;
+    }
+    poTytuleIOpisie.set(klucz1, row.id);
+
+    if (opis.length >= MIN_OPIS_DUPLIKATU) {
+      const klucz2 = `${row.source_name}||${row.category}||${opis}`;
+      if (poDlugimOpisie.has(klucz2)) {
+        duplikaty.push({ id: row.id, title: row.title, regula: 'ta sama tresc pod innym tytulem' });
+        continue;
+      }
+      poDlugimOpisie.set(klucz2, row.id);
     }
   }
-  if (duplicateIds.length) {
-    const placeholders = duplicateIds.map(() => '?').join(',');
-    db.prepare(`UPDATE utrudnienia SET active = 0 WHERE id IN (${placeholders})`).run(...duplicateIds);
-    console.log(`[db] zdezaktywowano ${duplicateIds.length} zdublowanych wpisow (ta sama tresc, rozne source_url)`);
+
+  return duplikaty;
+}
+
+// Sprzatanie przy starcie serwera.
+try {
+  const { zdezaktywowanych, szczegoly } = dezaktywujDuplikatyTresci();
+  if (zdezaktywowanych) {
+    console.log(`[db] zdezaktywowano ${zdezaktywowanych} zdublowanych wpisow (ta sama tresc, rozne source_url)`);
+    for (const d of szczegoly) {
+      console.log(`[db]   duplikat: "${d.title}" (${d.regula})`);
+    }
   }
 } catch (err) {
-  console.error('[db] blad jednorazowego sprzatania duplikatow:', err.message);
+  console.error('[db] blad sprzatania duplikatow:', err.message);
 }
 
 // WAZNE: published_at uzywa COALESCE w dwoch miejscach - to jest mechanizm
@@ -647,6 +716,9 @@ module.exports = {
   upsertMany,
   listUtrudnienia,
   getDescriptionsByUrls,
+  dezaktywujDuplikatyTresci,
+  wskazDuplikaty,
+  MIN_OPIS_DUPLIKATU,
   getSetting,
   setSetting,
   deactivateByUrls,

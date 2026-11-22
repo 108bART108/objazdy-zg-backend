@@ -5,7 +5,9 @@ const { fetchMzk } = require('./mzk');
 const { fetchZwik } = require('./zwik');
 const { fetchZdw } = require('./zdw');
 const { fetchPzzd } = require('./pzzd');
-const { upsertMany, recordSourceResult, markSourceAlerted, recordPushAttempt } = require('./db');
+const {
+  upsertMany, recordSourceResult, markSourceAlerted, recordPushAttempt, dezaktywujDuplikatyTresci,
+} = require('./db');
 const { sendSystemAlert } = require('./systemAlerts');
 const { notifySubscribers } = require('./push');
 const { qualityCheck } = require('./qualityCheck');
@@ -226,6 +228,31 @@ async function scrapeAll() {
   const items = dedupeByContent(rawItems);
 
   const { count, newItems, flaggedItems } = upsertMany(items);
+
+  // Sprzatanie duplikatow PO zapisie, co cykl.
+  //
+  // Deduplikacja wyzej (dedupeByContent) dziala tylko w obrebie jednego
+  // przebiegu i tylko na kluczu tytul+opis - a PZZD pokazal 22.11.2026, ze
+  // zrodlo potrafi wystawic to samo zamkniecie drogi pod dwoma roznymi
+  // tytulami, z identyczna trescia. Czytelnik widzial wtedy ten sam
+  // komunikat dwa razy pod rzad. Upsert ustawia active = 1, wiec raz
+  // zdezaktywowany duplikat wraca przy kazdym cyklu - dlatego to musi sie
+  // dziac po kazdym zapisie, a nie tylko przy starcie serwera.
+  try {
+    const { zdezaktywowanych, szczegoly } = dezaktywujDuplikatyTresci();
+    if (zdezaktywowanych) {
+      console.log(`[scrapeAll] ukryto ${zdezaktywowanych} zdublowanych wpisow`);
+      for (const d of szczegoly) {
+        const tresc = `[scrapeAll] duplikat ukryty: "${d.title}" (${d.regula})`;
+        if (zgloszoneOstrzezenia.has(tresc)) continue;
+        zgloszoneOstrzezenia.add(tresc);
+        console.log(tresc);
+      }
+    }
+  } catch (err) {
+    // Sprzatanie duplikatow nie moze przerwac scrapowania.
+    console.error('[scrapeAll] blad sprzatania duplikatow:', err.message);
+  }
 
   const ms = Date.now() - started;
   const skipped = rawItems.length - items.length;

@@ -145,6 +145,7 @@ const TESTY_TRESCI = [
   ['wyciaganie opisow MZK', './testMzkOpis'],
   ['obciecia tresci', './testObciecia'],
   ['komunikaty PZZD', './testPzzd'],
+  ['odsiewanie duplikatow', './testDuplikaty'],
 ];
 
 function sprawdzTresc() {
