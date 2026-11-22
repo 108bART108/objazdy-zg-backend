@@ -10,6 +10,7 @@
 
 const {
   wyciagListe, wyciagTresc, wykryjDroge, kolejnoscPobierania, dataPublikacjiWpisu, brakTresci,
+  WARIANTY_UA, KODY_BLOKADY,
 } = require('./pzzd');
 
 // --- fragment menu ze strony /47/Utrudnienia_w_ruchu/ -----------------------
@@ -196,8 +197,27 @@ sprawdz(brakTresci('Zamknięcie   drogi ', 'Zamknięcie drogi'),
 sprawdz(!brakTresci(t1181, 'Zamknięcie drogi powiatowej nr 1181F'),
   'brakTresci: prawdziwe zawiadomienie zostalo uznane za brak tresci - pobieralibysmy je co cykl bez konca');
 
+// ============================ 7. JAK SIE PRZEDSTAWIAMY =====================
+// 22.11.2026 pierwsze wdrozenie dostalo z BIP-u HTTP 403, choc dwa dni
+// wczesniej sondy pobraly te same strony z tego samego serwera. Roznica byla
+// JEDNA: scraper mowil o sobie "UtrudnieniaZG-bot", sondy "UtrudnieniaZG-sonda".
+// Slowo "bot" w nazwie wystarczylo. Dlatego teraz to slowo jest pilnowane.
+for (const ua of WARIANTY_UA) {
+  sprawdz(!/bot|crawler|spider|scraper/i.test(ua),
+    `nazwa "${ua.split(' ')[0]}" zawiera slowo, przez ktore zapory odrzucaja ruch`);
+}
+sprawdz(WARIANTY_UA.length >= 2,
+  'musi byc wiecej niz jedna nazwa - inaczej jedna blokada ucina cale zrodlo');
+sprawdz(/utrudnienia-zg\.pl/.test(WARIANTY_UA[0]),
+  'pierwsza nazwa musi uczciwie mowic, czym jesteśmy, i podawac kontakt do nas');
+sprawdz(KODY_BLOKADY.includes(403),
+  'kod 403 musi uruchamiac probe z inna nazwa - to wlasnie on nas zatrzymal');
+sprawdz(!KODY_BLOKADY.includes(404) && !KODY_BLOKADY.includes(500),
+  'kody 404 i 500 NIE moga uruchamiac kolejnych prob - zmiana nazwy nic tam nie da, '
+  + 'a mnozylaby zapytania do urzedu');
+
 // ============================ WYNIK =========================================
-const LICZBA_WARUNKOW = 41;
+const LICZBA_WARUNKOW = 41 + WARIANTY_UA.length + 4;
 
 function uruchomTesty() {
   return { sprawdzonych: LICZBA_WARUNKOW, bledy };

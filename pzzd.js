@@ -38,11 +38,40 @@ const MAX_POBRAN_NA_CYKL = 3;
 const nieudanePodstrony = new Map();
 const MAX_PROB_PODSTRONY = 3;
 
-const NAGLOWKI = {
-  'User-Agent': 'UtrudnieniaZG-bot/1.0 (+info@utrudnienia-zg.pl)',
-  'Accept': 'text/html,*/*;q=0.8',
-  'Accept-Language': 'pl-PL,pl;q=0.9',
-};
+// Jak sie przedstawiamy. To NIE jest drobiazg: 22.11.2026 pierwsze wdrozenie
+// dostalo z BIP-u HTTP 403, mimo ze dwa dni wczesniej sondy pobraly te same
+// strony z tego samego serwera Render bez problemu. Jedyna roznica miedzy nimi
+// byla nazwa w User-Agent - sondy mowily "UtrudnieniaZG-sonda", a scraper
+// "UtrudnieniaZG-bot". Filtry na BIP-ach i zapory aplikacyjne rutynowo odrzucaja
+// wszystko, co ma w nazwie "bot", "crawler" czy "spider".
+//
+// Dlatego nie zgadujemy jednego napisu, tylko mamy liste i trzymamy sie
+// pierwszego, ktory zadziala - dokladnie tak, jak dziala juz wybor posrednika
+// w mzk.js. Zadna z tych nazw nikogo nie udaje: kazda mowi, czym jesteśmy, i
+// podaje kontakt, zeby urzad mial do kogo napisac. Ostatnia, przegladarkowa,
+// jest wylacznie awaryjna.
+const WARIANTY_UA = [
+  'UtrudnieniaZG/1.0 (+https://utrudnienia-zg.pl; info@utrudnienia-zg.pl)',
+  'UtrudnieniaZG-sonda/1.0 (+info@utrudnienia-zg.pl)',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+    + 'Chrome/131.0.0.0 Safari/537.36',
+];
+
+// Odpowiedzi, ktore znacza "blokujemy Cie", a nie "nie ma takiej strony".
+// Tylko przy nich warto sprobowac przedstawic sie inaczej.
+const KODY_BLOKADY = [401, 403, 406, 429];
+
+// Indeks wariantu, ktory ostatnio zadzialal. Zostaje do restartu serwera.
+let dzialajacyUA = 0;
+let zgloszonoUA = false;
+
+function naglowki(indeksUA) {
+  return {
+    'User-Agent': WARIANTY_UA[indeksUA],
+    'Accept': 'text/html,*/*;q=0.8',
+    'Accept-Language': 'pl-PL,pl;q=0.9',
+  };
+}
 
 // Linie, ktore w zawiadomieniu sa ozdoba albo odsylaczem do zalacznika,
 // a nie trescia. "Z A W I A D O M I E N I E" bywa rozstrzelone spacjami.
@@ -222,10 +251,43 @@ function brakTresci(opis, tytul) {
   return opis.length < 60;
 }
 
+/**
+ * Pobiera strone. Przy odpowiedzi "blokujemy Cie" (403 i pokrewne) probuje
+ * przedstawic sie inaczej i zapamietuje wariant, ktory zadzialal - zeby nie
+ * dobijac sie do urzedu trzema zapytaniami przy kazdej kolejnej stronie.
+ *
+ * Kolejne warianty probujemy TYLKO przy kodach blokady. Przy 404 albo 500
+ * zmiana nazwy nic nie da, a tylko mnozylaby zapytania.
+ */
 async function pobierz(url) {
-  const odp = await fetch(url, { headers: NAGLOWKI, redirect: 'follow' });
-  if (!odp.ok) throw new Error(`HTTP ${odp.status}`);
-  return odp.text();
+  let ostatniKod = null;
+
+  for (let i = 0; i < WARIANTY_UA.length; i += 1) {
+    // Zaczynamy od wariantu, ktory juz raz zadzialal w tym procesie.
+    const indeks = (dzialajacyUA + i) % WARIANTY_UA.length;
+    const odp = await fetch(url, { headers: naglowki(indeks), redirect: 'follow' });
+
+    if (odp.ok) {
+      if (indeks !== dzialajacyUA || !zgloszonoUA) {
+        console.log(`[pzzd] BIP przyjmuje zapytania jako "${WARIANTY_UA[indeks].split(' ')[0]}"`);
+        zgloszonoUA = true;
+      }
+      dzialajacyUA = indeks;
+      return odp.text();
+    }
+
+    ostatniKod = odp.status;
+    if (!KODY_BLOKADY.includes(odp.status)) break;
+
+    console.warn(`[pzzd] HTTP ${odp.status} przy nazwie "${WARIANTY_UA[indeks].split(' ')[0]}" `
+      + `- probuje przedstawic sie inaczej (${i + 1}/${WARIANTY_UA.length})`);
+  }
+
+  if (KODY_BLOKADY.includes(ostatniKod)) {
+    throw new Error(`HTTP ${ostatniKod} - BIP odrzuca wszystkie nasze nazwy, `
+      + 'zrodlo wymaga kontaktu z urzedem');
+  }
+  throw new Error(`HTTP ${ostatniKod}`);
 }
 
 async function fetchPzzd() {
@@ -334,4 +396,6 @@ module.exports = {
   kolejnoscPobierania,
   dataPublikacjiWpisu,
   brakTresci,
+  WARIANTY_UA,
+  KODY_BLOKADY,
 };
