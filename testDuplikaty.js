@@ -171,13 +171,45 @@ const PRZYPADKI = [
 function uruchomTesty() {
   const bledy = [];
 
-  for (const p of PRZYPADKI) {
-    const wynik = wskazDuplikaty(p.rows);
-    const ukryte = wynik.map((d) => d.id).sort((a, b) => a - b);
-    const oczekiwane = [...p.ukryte].sort((a, b) => a - b);
+  // Funkcja decyzyjna nie moze NIC wypisywac. Gdy bezpiecznik wolal w niej
+  // console.warn, ten wlasnie test - uruchamiany przy kazdym starcie serwera -
+  // wstawial do produkcyjnego logu ostrzezenie o wpisach "B", "C", "D", "E",
+  // "F". Wygladalo jak awaria appki, a bylo moimi danymi testowymi.
+  const wypisane = [];
+  const prawdziweWarn = console.warn;
+  const prawdziweLog = console.log;
+  console.warn = (...a) => wypisane.push(a.join(' '));
+  console.log = (...a) => wypisane.push(a.join(' '));
 
-    if (ukryte.join(',') !== oczekiwane.join(',')) {
-      bledy.push(`${p.nazwa}: ukryto [${ukryte.join(', ')}], a powinno [${oczekiwane.join(', ')}]`);
+  try {
+    for (const p of PRZYPADKI) {
+      const { duplikaty } = wskazDuplikaty(p.rows);
+      const ukryte = duplikaty.map((d) => d.id).sort((a, b) => a - b);
+      const oczekiwane = [...p.ukryte].sort((a, b) => a - b);
+
+      if (ukryte.join(',') !== oczekiwane.join(',')) {
+        bledy.push(`${p.nazwa}: ukryto [${ukryte.join(', ')}], a powinno [${oczekiwane.join(', ')}]`);
+      }
+    }
+  } finally {
+    console.warn = prawdziweWarn;
+    console.log = prawdziweLog;
+  }
+
+  if (wypisane.length) {
+    bledy.push(`wskazDuplikaty wypisuje do logu ${wypisane.length} linii - a nie powinna zadnej. `
+      + `Przy starcie serwera trafiaja one do produkcyjnego logu jako falszywy alarm. `
+      + `Pierwsza: "${wypisane[0].slice(0, 120)}"`);
+  }
+
+  // Bezpiecznik musi oddawac wstrzymane wpisy wolajacemu - inaczej nikt sie
+  // nie dowie, ze w ogole zadzialal.
+  const zaDuzo = PRZYPADKI.find((p) => p.nazwa.startsWith('BEZPIECZNIK: regula chce ukryc'));
+  if (zaDuzo) {
+    const { wstrzymane } = wskazDuplikaty(zaDuzo.rows);
+    if (wstrzymane.length !== 5) {
+      bledy.push(`bezpiecznik powinien oddac 5 wstrzymanych wpisow, oddal ${wstrzymane.length} `
+        + '- bez tego ostrzezenie nigdy nie trafi do logu');
     }
   }
 
@@ -203,15 +235,18 @@ function uruchomTesty() {
       + '- przy takiej wartosci pomylka reguly znowu schowa wiele wpisow naraz');
   }
 
-  return { sprawdzonych: PRZYPADKI.length + 3, bledy };
+  return { sprawdzonych: PRZYPADKI.length + 5, bledy };
 }
 
 if (require.main === module) {
   const { sprawdzonych, bledy } = uruchomTesty();
   for (const p of PRZYPADKI) {
-    const wynik = wskazDuplikaty(p.rows);
+    const { duplikaty, wstrzymane } = wskazDuplikaty(p.rows);
     console.log(`--- ${p.nazwa}`);
-    console.log(`    ukryto: ${wynik.length ? wynik.map((d) => `#${d.id} (${d.regula})`).join(', ') : 'nic'}`);
+    console.log(`    ukryto: ${duplikaty.length ? duplikaty.map((d) => `#${d.id} (${d.regula})`).join(', ') : 'nic'}`);
+    if (wstrzymane.length) {
+      console.log(`    bezpiecznik wstrzymal: ${wstrzymane.map((d) => `"${d.title}"`).join(', ')}`);
+    }
   }
   console.log('');
   for (const b of bledy) console.log(`BLAD ${b}`);

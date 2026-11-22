@@ -193,7 +193,22 @@ function dezaktywujDuplikatyTresci() {
     'SELECT id, source_name, category, title, description FROM utrudnienia WHERE active = 1 ORDER BY id',
   ).all();
 
-  const duplikaty = wskazDuplikaty(rows);
+  const { duplikaty, wstrzymane } = wskazDuplikaty(rows);
+
+  // Tu, a nie w samej funkcji decyzyjnej - bo tylko tutaj wiemy, ze patrzymy
+  // na prawdziwa baze, a nie na wiersze podstawione przez test.
+  if (wstrzymane.length) {
+    const opisy = wstrzymane.map((d) => `"${d.title}"`).join(', ');
+    const tresc = `[db] UWAGA: regula "ta sama tresc pod innym tytulem" chciala ukryc `
+      + `${wstrzymane.length} wpisow (limit ${MAX_UKRYTYCH_REGULA_TRESCI}) - NIE ukrywam zadnego. `
+      + `Tyle naraz znaczy, ze regula sie myli, a nie ze zrodlo sie powtarza. Chodzilo o: ${opisy}`;
+    // Raz na uruchomienie serwera, a nie co dziesiec minut.
+    if (!zgloszoneBezpieczniki.has(tresc)) {
+      zgloszoneBezpieczniki.add(tresc);
+      console.warn(tresc);
+    }
+  }
+
   if (!duplikaty.length) return { zdezaktywowanych: 0, szczegoly: [] };
 
   const placeholders = duplikaty.map(() => '?').join(',');
@@ -240,26 +255,19 @@ function wskazDuplikaty(rows) {
   }
 
   // Bezpiecznik: lepiej pokazac duplikat niz schowac ostrzezenia.
+  //
+  // Ta funkcja NICZEGO NIE WYPISUJE - i to nie jest drobiazg stylistyczny.
+  // Przez chwile bezpiecznik wolal tu console.warn, a poniewaz te sama
+  // funkcje wywoluje test w kontroli startowej, do produkcyjnego logu trafialo
+  // przy kazdym starcie serwera ostrzezenie o wpisach "B", "C", "D", "E", "F",
+  // czyli o danych testowych. Wygladalo to jak prawdziwa awaria i poslalo nas
+  // oboje w pogon za duchem. Decyzje podejmuje ta funkcja, a raportuje ten,
+  // kto ja wola - bo tylko on wie, czy pracuje na prawdziwej bazie.
   if (zRegulyTresci.length > MAX_UKRYTYCH_REGULA_TRESCI) {
-    // Wypisujemy TYTULY, nie tylko liczbe. Sucha liczba "chciala ukryc 5"
-    // nie mowi nic poza tym, ze cos jest nie tak - a zeby to naprawic, trzeba
-    // wiedziec KTORE wpisy maja wspolna tresc. Bez tego zostaje zgadywanie.
-    const opis = zRegulyTresci.map((d) => `"${d.title}"`).join(', ');
-    const tresc = `[db] UWAGA: regula "ta sama tresc pod innym tytulem" chciala ukryc `
-      + `${zRegulyTresci.length} wpisow (limit ${MAX_UKRYTYCH_REGULA_TRESCI}) - NIE ukrywam zadnego. `
-      + `Tyle naraz znaczy, ze regula sie myli, a nie ze zrodlo sie powtarza. Chodzilo o: ${opis}`;
-
-    // Raz na uruchomienie serwera, a nie co dziesiec minut - inaczej to
-    // ostrzezenie zaglusza wszystko inne w logu, a tak samo jak przy
-    // [sanitize] caly jego sens polega na tym, zeby bylo widac.
-    if (!zgloszoneBezpieczniki.has(tresc)) {
-      zgloszoneBezpieczniki.add(tresc);
-      console.warn(tresc);
-    }
-    return duplikaty;
+    return { duplikaty, wstrzymane: zRegulyTresci };
   }
 
-  return [...duplikaty, ...zRegulyTresci];
+  return { duplikaty: [...duplikaty, ...zRegulyTresci], wstrzymane: [] };
 }
 
 // Sprzatanie przy starcie serwera.
