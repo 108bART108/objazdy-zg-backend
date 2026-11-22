@@ -14,7 +14,15 @@
 // duplikat" latwo wycisza rzeczy, ktorych wyciszac NIE WOLNO. Dlatego wiekszosc
 // przypadkow ponizej sprawdza nie to, co zostalo ukryte, a to, co MUSI zostac.
 
-const { wskazDuplikaty, MIN_OPIS_DUPLIKATU } = require('./db');
+const {
+  wskazDuplikaty, MIN_OPIS_DUPLIKATU, REGULA_TRESCI_ZRODLA, MAX_UKRYTYCH_REGULA_TRESCI,
+} = require('./db');
+
+// Prawdziwa tresc wpisu Enei: dlugo ponad prog 200 znakow, bo to lista ulic.
+const ENEA_TRESC = 'Planowana przerwa w dostawie energii elektrycznej w dniu 22.11.2026 '
+  + 'w godzinach od 8:00 do 15:00. Ulice: Akacjowa, Brzozowa, Cisowa, Dębowa, Grabowa, '
+  + 'Jarzębinowa, Kasztanowa, Klonowa, Lipowa, Modrzewiowa, Olchowa, Sosnowa, Świerkowa, '
+  + 'Topolowa, Wierzbowa, Wiśniowa.';
 
 // Tekst dlugosci podobnej do prawdziwego zawiadomienia PZZD.
 const DLUGA_TRESC = ('Powiatowy Zielonogórski Zarząd Dróg informuje, że w związku z zamknięciem '
@@ -107,6 +115,57 @@ const PRZYPADKI = [
     rows: [],
     ukryte: [],
   },
+
+  // --- PRAWDZIWA POMYLKA Z 22.11.2026 -------------------------------------
+  // Regula "ta sama tresc pod innym tytulem", wlaczona dla wszystkich zrodel,
+  // ukryla 14 powiadomien Enei o wylaczeniach pradu. Enea opisuje jedno
+  // wylaczenie pod kilkoma naglowkami obszarow, wiec tresc jest identyczna -
+  // ale naglowek obszaru to wlasnie ta informacja, ktora mowi mieszkancowi,
+  // ze sprawa dotyczy jego miejscowosci. Zadnego z tych wpisow ukrywac NIE
+  // WOLNO i to jest najwazniejszy przypadek w tym pliku.
+  {
+    nazwa: 'ENEA: jedno wylaczenie pod kilkoma obszarami - WSZYSTKIE musza zostac',
+    rows: [
+      { id: 1, source_name: 'Enea Operator', category: 'prad', description: ENEA_TRESC, title: 'Obszar Czerwieńsk dzisiaj' },
+      { id: 2, source_name: 'Enea Operator', category: 'prad', description: ENEA_TRESC, title: 'Obszar Zielona Góra dzisiaj' },
+      { id: 3, source_name: 'Enea Operator', category: 'prad', description: ENEA_TRESC, title: 'Obszar Świdnica dzisiaj' },
+      { id: 4, source_name: 'Enea Operator', category: 'prad', description: ENEA_TRESC, title: 'Obszar Świdnica, Zielona Góra dzisiaj' },
+      { id: 5, source_name: 'Enea Operator', category: 'prad', description: ENEA_TRESC, title: 'Obszar Nowogród Bobrzański dzisiaj' },
+    ],
+    ukryte: [],
+  },
+  {
+    nazwa: 'ENEA: ten sam obszar i ta sama tresc dwa razy - to juz prawdziwy duplikat',
+    rows: [
+      { id: 1, source_name: 'Enea Operator', category: 'prad', description: ENEA_TRESC, title: 'Obszar Świdnica dzisiaj' },
+      { id: 2, source_name: 'Enea Operator', category: 'prad', description: ENEA_TRESC, title: 'Obszar Świdnica dzisiaj' },
+    ],
+    ukryte: [2],
+  },
+  {
+    nazwa: 'BEZPIECZNIK: regula chce ukryc za duzo naraz - nie ukrywa nic',
+    rows: [
+      { id: 1, source_name: 'PZZD Gorzykowo', category: 'drogi', description: DLUGA_TRESC, title: 'A' },
+      { id: 2, source_name: 'PZZD Gorzykowo', category: 'drogi', description: DLUGA_TRESC, title: 'B' },
+      { id: 3, source_name: 'PZZD Gorzykowo', category: 'drogi', description: DLUGA_TRESC, title: 'C' },
+      { id: 4, source_name: 'PZZD Gorzykowo', category: 'drogi', description: DLUGA_TRESC, title: 'D' },
+      { id: 5, source_name: 'PZZD Gorzykowo', category: 'drogi', description: DLUGA_TRESC, title: 'E' },
+      { id: 6, source_name: 'PZZD Gorzykowo', category: 'drogi', description: DLUGA_TRESC, title: 'F' },
+    ],
+    ukryte: [],
+  },
+  {
+    nazwa: 'BEZPIECZNIK nie blokuje starej reguly (ten sam tytul i opis)',
+    rows: [
+      { id: 1, source_name: 'ZDW Zielona Gora', category: 'drogi', description: 'Remont odcinka.', title: 'Remont DW 278' },
+      { id: 2, source_name: 'ZDW Zielona Gora', category: 'drogi', description: 'Remont odcinka.', title: 'Remont DW 278' },
+      { id: 3, source_name: 'ZDW Zielona Gora', category: 'drogi', description: 'Remont odcinka.', title: 'Remont DW 278' },
+      { id: 4, source_name: 'ZDW Zielona Gora', category: 'drogi', description: 'Remont odcinka.', title: 'Remont DW 278' },
+      { id: 5, source_name: 'ZDW Zielona Gora', category: 'drogi', description: 'Remont odcinka.', title: 'Remont DW 278' },
+      { id: 6, source_name: 'ZDW Zielona Gora', category: 'drogi', description: 'Remont odcinka.', title: 'Remont DW 278' },
+    ],
+    ukryte: [2, 3, 4, 5, 6],
+  },
 ];
 
 function uruchomTesty() {
@@ -129,7 +188,22 @@ function uruchomTesty() {
       + 'krotkie, przypadkowo zbiezne opisy zaczna byc uznawane za duplikaty');
   }
 
-  return { sprawdzonych: PRZYPADKI.length + 1, bledy };
+  // Enea ponad wszystko: to jej 14 ostrzezen o pradzie zniklo 22.11.2026.
+  // Zadne zrodlo, ktore opisuje jedno zdarzenie pod kilkoma naglowkami, nie
+  // moze trafic na te liste.
+  for (const zabronione of ['Enea Operator', 'Enea', 'UM Zielona Gora', 'ZDW Zielona Gora', 'MZK', 'ZWiK']) {
+    if (REGULA_TRESCI_ZRODLA.includes(zabronione)) {
+      bledy.push(`zrodlo "${zabronione}" nie moze byc objete regula "ta sama tresc pod innym `
+        + 'tytulem" - tak wlasnie zniknely powiadomienia o wylaczeniach pradu');
+    }
+  }
+
+  if (MAX_UKRYTYCH_REGULA_TRESCI > 5) {
+    bledy.push(`bezpiecznik MAX_UKRYTYCH_REGULA_TRESCI = ${MAX_UKRYTYCH_REGULA_TRESCI} jest za luzny `
+      + '- przy takiej wartosci pomylka reguly znowu schowa wiele wpisow naraz');
+  }
+
+  return { sprawdzonych: PRZYPADKI.length + 3, bledy };
 }
 
 if (require.main === module) {

@@ -136,6 +136,28 @@ try {
 // Identyczny DLUGI tekst to natomiast pewny znak, ze to jedno zawiadomienie.
 const MIN_OPIS_DUPLIKATU = 200;
 
+// Zrodla, dla ktorych wolno stosowac regule 2 ("ta sama tresc pod innym
+// tytulem"). Lista, a nie "wszystkie", bo 22.11.2026 ta regula wlaczona
+// globalnie ukryla 14 PRAWDZIWYCH powiadomien o wylaczeniach pradu Enei:
+// "Obszar Czerwiensk dzisiaj", "Obszar Swidnica dzisiaj", "Obszar Zielona
+// Gora dzisiaj"... Enea opisuje to samo wylaczenie pod kilkoma naglowkami
+// obszarow (w logu byl nawet "Obszar Swidnica, Zielona Gora dzisiaj") i tresc
+// jest wtedy identyczna - ale to NIE duplikat: mieszkaniec Swidnicy i
+// mieszkaniec Zielonej Gory musza zobaczyc to ostrzezenie kazdy u siebie,
+// bo wlasnie naglowek obszaru mowi im, ze sprawa dotyczy ich.
+// Prog 200 znakow przed tym nie uchronil, bo listy ulic sa dlugie.
+//
+// Wniosek: czy identyczna tresc znaczy "ten sam komunikat" zalezy od tego,
+// JAK dane zrodlo publikuje - wiec to musi byc decyzja per zrodlo, podjeta
+// po zobaczeniu prawdziwych danych, a nie regula na wszystko.
+const REGULA_TRESCI_ZRODLA = ['PZZD Gorzykowo'];
+
+// Bezpiecznik. Regula 2 nigdy nie powinna ukryc wielu wpisow naraz - PZZD
+// publikuje szesc komunikatow w roku. Jesli chce ukryc wiecej, to znaczy, ze
+// sie myli, i lepiej nie ukryc nic niz schowac ostrzezenia przed ludzmi.
+// Dokladnie tego brakowalo, gdy regula zabrala 14 wpisow Enei za jednym razem.
+const MAX_UKRYTYCH_REGULA_TRESCI = 3;
+
 /**
  * Dezaktywuje wpisy, ktore sa tym samym komunikatem zapisanym dwa razy pod
  * roznymi source_url. Zostaje wpis z najnizszym id (odkryty pierwszy),
@@ -189,6 +211,7 @@ function wskazDuplikaty(rows) {
   const poTytuleIOpisie = new Map();
   const poDlugimOpisie = new Map();
   const duplikaty = [];
+  const zRegulyTresci = [];
 
   for (const row of rows) {
     const tytul = normalize(row.title);
@@ -201,17 +224,27 @@ function wskazDuplikaty(rows) {
     }
     poTytuleIOpisie.set(klucz1, row.id);
 
+    if (!REGULA_TRESCI_ZRODLA.includes(row.source_name)) continue;
+
     if (opis.length >= MIN_OPIS_DUPLIKATU) {
       const klucz2 = `${row.source_name}||${row.category}||${opis}`;
       if (poDlugimOpisie.has(klucz2)) {
-        duplikaty.push({ id: row.id, title: row.title, regula: 'ta sama tresc pod innym tytulem' });
+        zRegulyTresci.push({ id: row.id, title: row.title, regula: 'ta sama tresc pod innym tytulem' });
         continue;
       }
       poDlugimOpisie.set(klucz2, row.id);
     }
   }
 
-  return duplikaty;
+  // Bezpiecznik: lepiej pokazac duplikat niz schowac ostrzezenia.
+  if (zRegulyTresci.length > MAX_UKRYTYCH_REGULA_TRESCI) {
+    console.warn(`[db] UWAGA: regula "ta sama tresc pod innym tytulem" chciala ukryc `
+      + `${zRegulyTresci.length} wpisow (limit ${MAX_UKRYTYCH_REGULA_TRESCI}) - NIE ukrywam zadnego. `
+      + 'Tyle naraz znaczy, ze regula sie myli, a nie ze zrodlo sie powtarza.');
+    return duplikaty;
+  }
+
+  return [...duplikaty, ...zRegulyTresci];
 }
 
 // Sprzatanie przy starcie serwera.
@@ -719,6 +752,8 @@ module.exports = {
   dezaktywujDuplikatyTresci,
   wskazDuplikaty,
   MIN_OPIS_DUPLIKATU,
+  REGULA_TRESCI_ZRODLA,
+  MAX_UKRYTYCH_REGULA_TRESCI,
   getSetting,
   setSetting,
   deactivateByUrls,
