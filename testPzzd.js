@@ -69,6 +69,52 @@ const PODSTRONA_1140F = `<div class="information"> <p class="phx ph3"> 22.05.202
 </div>
 </div> </div></div>`;
 
+// --- podstrona Tour de Pologne --------------------------------------------
+// Zdjeta sonda 22.11.2026. Konczy sie zdaniem "Mape ... mozna pobrac ponizej:"
+// i adresem PDF-a. Adres wycinamy, wiec opis konczyl sie wiszacym dwukropkiem
+// i qualityCheck ukryl caly komunikat w appce.
+const PODSTRONA_TOUR = `<div class="paragraph"> <h4 class="hide">Akapit nr 1 - brak tytułu</h4>
+<div>
+<div>28.07.2026</div>
+<div style="text-align:center"><strong>UWAGA! CZASOWE OGRANICZENIA W RUCHU DROGOWYM &ndash; 83.TOUR DE POLOGNE</strong></div>
+<div>Informujemy, że <strong>5 sierpnia 2026</strong> roku w związku z przejazdem wyścigu <strong>Tour de Pologne</strong> przez drogi powiatowe na terenie gminy Sulech&oacute;w oraz gminy Zab&oacute;r wystąpią czasowe ograniczenia w ruchu drogowym. Przewidywane godziny utrudnień:</div>
+<div><strong>Gmina Sulech&oacute;w 14:00-16:00</strong></div>
+<div><strong>Gmina Zab&oacute;r 16:00-17:00</strong></div>
+<div>Utrudnienia obejmą w szczeg&oacute;lności:</div>
+<div>Gmina Sulech&oacute;w &ndash; m. Brzezie k. Sulechowa i Sulech&oacute;w:</div>
+<ul>
+        <li>drogę powiatową nr 1201F <strong>Żwirki i Wigury</strong></li>
+        <li>drogę powiatową nr 1201F <strong>Styczniowa</strong></li>
+        <li>drogę powiatową nr 3805F <strong>Jana Pawła II</strong></li>
+</ul>
+<div>Gmina Zab&oacute;r &ndash; m. Przytok:</div>
+<ul>
+        <li>drogę powiatową nr 1185 F relacji Łaz-Przytok w tym <strong>ul. Lubuską</strong></li>
+</ul>
+<div>Na czas przejazdu zawodnik&oacute;w oraz pojazd&oacute;w towarzyszących ruch na trasie wyścigu będzie czasowo wstrzymywany zgodnie z poleceniami Policji oraz służb zabezpieczających wydarzenie. Prosimy mieszkańc&oacute;w i wszystkich uczestnik&oacute;w ruchu drogowego o uwzględnienie utrudnień przy planowaniu podr&oacute;ży (bądź wybranie tras alternatywnych), zachowanie szczeg&oacute;lnej ostrożności oraz stosowanie się do poleceń Policji i służb porządkowych.</div>
+<div><strong>Przepraszamy za wszelkie niedogodności i dziękujemy za wyrozumiałość.</strong></div>
+<div>&nbsp;</div>
+<div><span style="color:rgb(51, 51, 51); font-size:12px">Mapę z zazanaczonymi ulicami przejazdu wyścigu można pobrać poniżej:</span></div>
+<div><a href="https://bip.pzzd.powiat-zielonogorski.pl/system/pobierz.php?id=e8011ba7e9d670829ef8e9007464878d">https://bip.pzzd.powiat-zielonogorski.pl/system/pobierz.php?id=e8011ba7e9d670829ef8e9007464878d</a></div>
+</div> </div>`;
+
+// --- podstrona mostu na Kanale Dychowskim ----------------------------------
+// Ta sama choroba, inne slowa: konczy sie na "Proponowany objazd:".
+// Dodatkowo data stoi tu z "r." na koncu ("05.06.2023r."), czego poprzednia
+// regula na sama date nie lapala - i data wchodzila na poczatek opisu.
+const PODSTRONA_MOST = `<div class="paragraph"> <h4 class="hide">Akapit nr 1 - brak tytułu</h4>
+<div style="text-align:right">05.06.2023r.</div>
+<div style="text-align:center">&nbsp;</div>
+<div style="text-align:center"><strong>UWAGA UTRUDNIENIA W RUCHU DROGOWYM&nbsp;</strong></div>
+<div>&nbsp;</div>
+<div><strong>W związku z uszkodzeniem obiektu mostowego w ciągu drogi powiatowej nr 1172F na kanale Dychowskim przed miejscowością Łagoda (gmina Nowogr&oacute;d Bobrzański), Powiatowy Zielonog&oacute;rski Zarząd Dr&oacute;g informuje, że w dniu 05.06.2023 r. w godzinach popołudniowych zamknięto w/w obiekt mostowy dla ruchu pojazd&oacute;w i pieszych.</strong></div>
+<div>&nbsp;</div>
+<div>Proponowany objazd:</div>
+<div><a href="https://bip.wrota.lubuskie.pl/pzzd_gorzykowo/system/pobierz.php?id=1755">https://bip.wrota.lubuskie.pl/pzzd_gorzykowo/system/pobierz.php?id=1755</a></div>
+<div>&nbsp;</div>
+<div>&nbsp;</div>
+</div>`;
+
 const bledy = [];
 function sprawdz(warunek, opis) {
   if (!warunek) bledy.push(opis);
@@ -138,6 +184,40 @@ const zdanie = 'Powiatowy Zielonogórski Zarząd Dróg informuje';
 const ile = t1140.split(zdanie).length - 1;
 sprawdz(ile === 1, `tresc 1140F: zdanie otwierajace powtorzone ${ile} razy (zagniezdzenia)`);
 
+// ======== 2b. WISZACY DWUKROPEK NA KONCU (prawdziwy blad z 22.11.2026) =====
+// Oba te komunikaty appka UKRYLA, bo qualityCheck slusznie uznal opis za
+// urwany. Tresc byla cala - wisialo tylko zdanie zapowiadajace plik PDF.
+const tTour = wyciagTresc(PODSTRONA_TOUR);
+
+sprawdz(!/:\s*$/.test(tTour), `tresc Tour: konczy sie dwukropkiem -> "${tTour.slice(-60)}"`);
+sprawdz(!tTour.includes('można pobrać poniżej'), 'tresc Tour: zostala zapowiedz mapy do pobrania');
+sprawdz(tTour.endsWith('wyrozumiałość.'),
+  `tresc Tour: powinna konczyc sie na "...wyrozumialosc.", a konczy na "${tTour.slice(-40)}"`);
+sprawdz(!tTour.startsWith('28.07.2026'), 'tresc Tour: zaczyna sie od samej daty');
+sprawdz(tTour.includes('UWAGA! CZASOWE OGRANICZENIA'), 'tresc Tour: zgubiono naglowek komunikatu');
+
+// Listy ulic to sedno tego komunikatu - bez nich wpis nic nie mowi.
+for (const ulica of ['1201F', 'Żwirki i Wigury', 'Styczniowa', '3805F', 'Jana Pawła II', '1185 F', 'ul. Lubuską']) {
+  sprawdz(tTour.includes(ulica), `tresc Tour: brakuje "${ulica}" z listy zamknietych drog`);
+}
+// Dwukropki W SRODKU tekstu musza zostac - tam ciag dalszy jest.
+sprawdz(tTour.includes('Przewidywane godziny utrudnień:'),
+  'tresc Tour: wyciecie dwukropka zabralo zdanie ze srodka tekstu');
+sprawdz(tTour.includes('Gmina Sulechów 14:00-16:00') && tTour.includes('Gmina Zabór 16:00-17:00'),
+  'tresc Tour: zgubiono godziny utrudnien');
+
+const tMost = wyciagTresc(PODSTRONA_MOST);
+sprawdz(!/:\s*$/.test(tMost), `tresc Most: konczy sie dwukropkiem -> "${tMost.slice(-60)}"`);
+sprawdz(!tMost.includes('Proponowany objazd'), 'tresc Most: zostala zapowiedz objazdu bez objazdu');
+sprawdz(!/^05\.06\.2023/.test(tMost),
+  `tresc Most: zaczyna sie od samej daty z "r." na koncu -> "${tMost.slice(0, 40)}"`);
+sprawdz(tMost.includes('drogi powiatowej nr 1172F'), 'tresc Most: zgubiono numer drogi');
+sprawdz(tMost.includes('Łagoda') && tMost.includes('Nowogród Bobrzański'),
+  'tresc Most: zgubiono nazwy miejscowosci');
+sprawdz(tMost.endsWith('pojazdów i pieszych.'),
+  `tresc Most: powinna konczyc sie na "...pojazdow i pieszych.", a konczy na "${tMost.slice(-40)}"`);
+sprawdz(!/https?:\/\//.test(tMost), 'tresc Most: zostal surowy adres pliku');
+
 // ============================ 3. NUMER DROGI ================================
 sprawdz(wykryjDroge('Zamknięcie drogi powiatowej nr 1181F') === 'droga powiatowa nr 1181F',
   `numer drogi: "${wykryjDroge('Zamknięcie drogi powiatowej nr 1181F')}"`);
@@ -197,6 +277,19 @@ sprawdz(brakTresci('Zamknięcie   drogi ', 'Zamknięcie drogi'),
 sprawdz(!brakTresci(t1181, 'Zamknięcie drogi powiatowej nr 1181F'),
   'brakTresci: prawdziwe zawiadomienie zostalo uznane za brak tresci - pobieralibysmy je co cykl bez konca');
 
+// Opisy zapisane przez STARA wersje parsera - koncza sie wiszacym
+// dwukropkiem. Musza byc uznane za brak tresci, inaczej zostana w bazie na
+// zawsze i oba komunikaty pozostana w appce ukryte.
+sprawdz(brakTresci('UWAGA UTRUDNIENIA W RUCHU DROGOWYM W związku z uszkodzeniem obiektu mostowego '
+  + 'w ciągu drogi powiatowej nr 1172F na kanale Dychowskim zamknięto obiekt. Proponowany objazd:', 'Most'),
+'brakTresci: stary opis konczacy sie dwukropkiem musi byc pobrany ponownie');
+sprawdz(brakTresci(`${tTour.slice(0, 500)} Mapę można pobrać poniżej: `, 'Tour De Pologne'),
+  'brakTresci: dwukropek ze spacja na koncu tez musi uruchomic ponowne pobranie');
+sprawdz(!brakTresci(tTour, 'Tour De Pologne'),
+  'brakTresci: poprawiony opis Tour nie moze byc pobierany w kolko');
+sprawdz(!brakTresci(tMost, 'Most na Kanale Dychowskim'),
+  'brakTresci: poprawiony opis Mostu nie moze byc pobierany w kolko');
+
 // ============================ 7. JAK SIE PRZEDSTAWIAMY =====================
 // 22.11.2026 pierwsze wdrozenie dostalo z BIP-u HTTP 403, choc dwa dni
 // wczesniej sondy pobraly te same strony z tego samego serwera. Roznica byla
@@ -217,7 +310,7 @@ sprawdz(!KODY_BLOKADY.includes(404) && !KODY_BLOKADY.includes(500),
   + 'a mnozylaby zapytania do urzedu');
 
 // ============================ WYNIK =========================================
-const LICZBA_WARUNKOW = 41 + WARIANTY_UA.length + 4;
+const LICZBA_WARUNKOW = 41 + 20 + 4 + WARIANTY_UA.length + 4;
 
 function uruchomTesty() {
   return { sprawdzonych: LICZBA_WARUNKOW, bledy };

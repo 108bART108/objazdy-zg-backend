@@ -78,7 +78,9 @@ function naglowki(indeksUA) {
 const SMIECI = [
   /^akapit nr \d+/i,
   /^z\s*a\s*w\s*i\s*a\s*d\s*o\s*m\s*i\s*e\s*n\s*i\s*e$/i,
-  /^\d{2}\.\d{2}\.\d{4}\s*$/,
+  // Sama data w osobnej linii - BIP stawia ja nad zawiadomieniem. Czasem
+  // z "r." na koncu ("05.06.2023r."), czasem bez.
+  /^\d{1,2}\.\d{1,2}\.\d{4}\s*(r\.?)?\s*$/i,
   /^(za[łl][ąa]cznik\w*|plik\w*|mapk\w*)\s*(do pobrania|z orientacyjnym[^:]*)?\s*[:.]?\s*$/i,
   /^w za[łl][ąa]czeniu mapka/i,
   /^pobierz dane xml/i,
@@ -185,6 +187,20 @@ function wyciagTresc(html) {
     linie.push(t);
   });
 
+  // Zdanie konczace sie dwukropkiem obiecuje ciag dalszy. Gdy po nim nic nie
+  // zostalo, obietnica jest bez pokrycia - i wlasnie tak konczyly sie dwa
+  // komunikaty 22.11.2026: "Mape z zaznaczonymi ulicami przejazdu wyscigu
+  // mozna pobrac ponizej:" oraz "Proponowany objazd:". W obu przypadkach
+  // dalej byl tylko adres pliku PDF, ktory wycinamy, bo nie jest trescia.
+  // qualityCheck wylapal to sam ("opis urywa sie na dwukropku") i oznaczyl
+  // wpisy do przejrzenia, czyli ukryl je w appce.
+  //
+  // Nie dopisujemy kolejnych sformulowan do listy SMIECI, bo urzad zawsze
+  // wymysli nowe ("szczegoly w zalaczniku:", "trasa objazdu:"). Zamiast tego
+  // odcinamy KAZDE wiszace zdanie z konca - niezaleznie od tego, jak brzmi.
+  // W srodku tekstu dwukropek zostaje nietkniety, bo tam ciag dalszy jest.
+  while (linie.length && /:\s*$/.test(linie[linie.length - 1])) linie.pop();
+
   return linie.join(' ').replace(/\s+/g, ' ').trim().slice(0, LIMIT_ZRODLA);
 }
 
@@ -248,6 +264,16 @@ function brakTresci(opis, tytul) {
   if (!opis) return true;
   const norm = (t) => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
   if (norm(opis) === norm(tytul)) return true;
+
+  // Opis konczacy sie dwukropkiem to slad po starej wersji parsera, ktora
+  // zostawiala wiszace zdanie ("Proponowany objazd:"). Takie opisy siedza
+  // JUZ w bazie - dlugie i rozne od tytulu, wiec bez tego warunku zostalyby
+  // tam na zawsze, a appka trzymalaby oba komunikaty ukryte jako wpisy do
+  // przejrzenia. Pytanie "czy ta tresc jest w porzadku" musi obejmowac tez
+  // to, co zapisalismy wczoraj, nie tylko to, co pobieramy dzisiaj - bo na
+  // tym wlasnie wykladalismy sie w tym projekcie najczesciej.
+  if (/:\s*$/.test(opis.trim())) return true;
+
   return opis.length < 60;
 }
 
