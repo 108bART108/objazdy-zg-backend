@@ -5,6 +5,7 @@ const { fetchEnea } = require('./enea');
 const { fetchMzk } = require('./mzk');
 const { fetchZwik } = require('./zwik');
 const { fetchZdw } = require('./zdw');
+const { fetchPzzd } = require('./pzzd');
 const { scanItem } = require('./sanitize');
 const webpush = require('web-push');
 
@@ -24,6 +25,7 @@ async function runHealthCheck() {
     { name: 'ZWiK', fn: fetchZwik },
     { name: 'MZK', fn: fetchMzk },
     { name: 'Enea', fn: fetchEnea },
+    { name: 'PZZD (drogi powiatowe)', fn: fetchPzzd },
     { name: 'htmlSources (generyczne)', fn: fetchHtmlSources },
   ];
 

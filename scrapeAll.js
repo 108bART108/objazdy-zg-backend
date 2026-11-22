@@ -4,6 +4,7 @@ const { fetchEnea } = require('./enea');
 const { fetchMzk } = require('./mzk');
 const { fetchZwik } = require('./zwik');
 const { fetchZdw } = require('./zdw');
+const { fetchPzzd } = require('./pzzd');
 const { upsertMany, recordSourceResult, markSourceAlerted, recordPushAttempt } = require('./db');
 const { sendSystemAlert } = require('./systemAlerts');
 const { notifySubscribers } = require('./push');
@@ -119,6 +120,9 @@ const EMPTY_CYCLES_BEFORE_ALERT = 8;
 
 // Zrodla, ktore moga byc puste z zalozenia (htmlSources ma celowo pusta
 // liste zrodel) - ich nie pilnujemy.
+// PZZD publikuje okolo szesciu komunikatow w roku i NIE kasuje starych
+// pozycji z zakladki, wiec pusta lista oznacza tam awarie strony, nie brak
+// utrudnien - dlatego pilnujemy go normalnie, razem z pozostalymi.
 const SOURCES_ALLOWED_EMPTY = ['htmlSources'];
 
 // Sprawdza, czy ktores zrodlo przestalo zwracac wpisy, i wysyla JEDEN
@@ -156,13 +160,14 @@ async function checkSourcesHealth(perSource) {
 
 async function scrapeAll() {
   const started = Date.now();
-  const [fromRss, fromHtml, fromEnea, fromMzk, fromZwik, fromZdw] = await Promise.all([
+  const [fromRss, fromHtml, fromEnea, fromMzk, fromZwik, fromZdw, fromPzzd] = await Promise.all([
     fetchUmZgora(),
     fetchHtmlSources(),
     fetchEnea(),
     fetchMzk(),
     fetchZwik(),
     fetchZdw(),
+    fetchPzzd(),
   ]);
 
   // Centralne, drugie sprawdzenie jakosci - dotyczy WSZYSTKICH zrodel
@@ -181,6 +186,7 @@ async function scrapeAll() {
     mzk: fromMzk,
     zwik: fromZwik,
     zdw: fromZdw,
+    pzzd: fromPzzd,
   }).catch((err) => console.error('[scrapeAll] blad kontroli zdrowia zrodel:', err.message));
 
   // Centralne czyszczenie tresci - PRZED qualityCheck i przed zapisem.
@@ -196,7 +202,7 @@ async function scrapeAll() {
   // Czyscimy przed qualityCheck, zeby kontrola jakosci oceniala tekst, ktory
   // naprawde zobaczy mieszkaniec, a nie wersje ze smieciami CMS-a.
   const { items: oczyszczone, warnings: ostrzezeniaTresci } = sanitizeItems(
-    [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk, ...fromZwik, ...fromZdw],
+    [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk, ...fromZwik, ...fromZdw, ...fromPzzd],
   );
 
   // Kazde ostrzezenie wypisujemy RAZ na uruchomienie serwera, a nie co cykl.

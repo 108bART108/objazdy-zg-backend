@@ -144,6 +144,7 @@ const TESTY_TRESCI = [
   ['filtr i kategorie komunikatow', './testUmZgora'],
   ['wyciaganie opisow MZK', './testMzkOpis'],
   ['obciecia tresci', './testObciecia'],
+  ['komunikaty PZZD', './testPzzd'],
 ];
 
 function sprawdzTresc() {
