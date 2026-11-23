@@ -254,7 +254,18 @@ function przetworzWpisy(zrodlo, items) {
     // ani czego dotyczy - a zajmuje miejsce i wyglada jak pelna informacja.
     // Zbieramy je osobno, zeby bylo widac w logu, ile tresci tracimy; docelowo
     // trzeba je dociagac z podstrony, tak jak przy ZWiK-u.
-    if (opis.length < MIN_DL_OPISU) {
+    // ...ale sama dlugosc opisu to za tepe kryterium i druga proba na zywo
+    // mi to pokazala: wpis "Przerwa w dostawie wody w Bogaczowie" tez nie ma
+    // tresci w kanale, a jego TYTUL mowi wszystko - co i gdzie. Wypadl razem
+    // z "Awaria" i "KOMUNIKAT", czyli stracilismy prawdziwa informacje.
+    //
+    // Wlasciwe pytanie brzmi wiec: czy sam tytul niesie komunikat o przerwie.
+    // Odpowiada na nie ten sam klasyfikator, ktory filtruje reszte - i robi
+    // to dobrze: "Przerwa w dostawie wody w Bogaczowie" przechodzi, bo ma
+    // i sygnal przerwy, i wode; "Awaria" nie przechodzi, bo nie wiadomo
+    // awaria czego; "KOMUNIKAT" i "Uwaga mieszkancy" nie przechodza w ogole.
+    const tytulSamWystarcza = Boolean(kategoriaWpisu(tytulZrodla, ''));
+    if (opis.length < MIN_DL_OPISU && !tytulSamWystarcza) {
       bezTresci.push(tytulZrodla);
       pominietych += 1;
       continue;
@@ -280,7 +291,10 @@ function przetworzWpisy(zrodlo, items) {
       category: zrodlo.kategoria,
       title: zbudujTytul(zrodlo.gmina, tytulZrodla, zakonczona),
       street: wykryjMiejsce(tytulZrodla, opis),
-      description: opis,
+      // Gdy kanal nie dal tresci, a tytul sam niesie komunikat, opisem
+      // zostaje tytul. Powtorzenie w appce jest nieladne, ale uczciwe:
+      // tyle wlasnie powiedzial nam urzad. sanitize zglosi to raz w logu.
+      description: opis.length >= MIN_DL_OPISU ? opis : tytulZrodla,
       published_at: publikacja ? new Date(publikacja).toISOString() : null,
       event_date: eventDate ? eventDate.toISOString() : null,
     }));

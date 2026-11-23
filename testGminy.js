@@ -69,11 +69,14 @@ const WPISY_NOWOGROD = [
     contentSnippet: 'Informujemy o przerwie w dostawie wody w dniu 7.11.2026 r. w Nowogrodzie '
       + 'Bobrzańskim przy ul. Kościuszki w godzinach od 8:00 do 12:00.',
   },
+  // Ten wpis NIE MA tresci w kanale - tak jest naprawde, sprawdzone proba
+  // na zywo. Ale jego tytul sam mowi, co i gdzie, wiec musi wejsc do appki.
+  // Pierwsza wersja progu dlugosci wyrzucila go razem z "Awaria" i wlasnie
+  // tak stracilismy prawdziwa informacje o przerwie w Bogaczowie.
   {
     title: 'Przerwa w dostawie wody w Bogaczowie',
     link: 'https://spwsnow.pl/?p=1760',
     isoDate: '2026-08-13T06:20:40.000Z',
-    contentSnippet: 'W dniu 14.08.2026 r. nastąpi przerwa w dostawie wody w miejscowości Bogaczów.',
   },
   // Komunikat, ktory JEST samym odwolaniem awarii - nie dopisujemy mu
   // "(zakonczona)", bo to by zabrzmialo absurdalnie.
@@ -254,11 +257,20 @@ if (ploty) {
   sprawdz(ploty.published_at === '2026-11-20T08:57:38.000Z',
     `data publikacji: ${ploty.published_at}`);
 }
+// Bogaczow: kanal nie dal tresci, ale tytul sam niesie komunikat.
+// Ten wpis MUSI wejsc - inaczej tracimy prawdziwa przerwe w dostawie wody.
 const bogaczow = nowogrod.wyniki.find((w) => w.source_url.includes('1760'));
+sprawdz(!!bogaczow,
+  'Bogaczów: wpis bez tresci w kanale, ale z mowiacym tytulem, musi wejsc do appki');
 if (bogaczow) {
-  sprawdz(Boolean(bogaczow.event_date),
-    'Bogaczów: nie odczytano daty wydarzenia z tresci ("W dniu 14.08.2026 r.")');
+  sprawdz(bogaczow.description === 'Przerwa w dostawie wody w Bogaczowie',
+    `Bogaczów: opisem ma zostac tytul, jest "${bogaczow.description}"`);
+  sprawdz(bogaczow.title === 'Nowogród Bobrzański: Przerwa w dostawie wody w Bogaczowie',
+    `Bogaczów: tytul "${bogaczow.title}"`);
 }
+// ...a wpisy, ktorych tytul nic nie mowi, nadal wypadaja.
+sprawdz(!nowogrod.bezTresci.includes('Przerwa w dostawie wody w Bogaczowie'),
+  'Bogaczów: nie moze byc liczony jako wpis bez tresci - jego tytul wystarcza');
 
 // ===================== 7. PELNA TRESC PRZED ZAJAWKA =========================
 // Zajawka z WordPressa konczy sie "[...]". Pelna tresc jest w tej samej
@@ -354,7 +366,7 @@ sprawdz(zbudujTytul('Nowogród Bobrzański', 'Awaria w Nowogrodzie Bobrzanskim',
   .startsWith('Nowogród Bobrzański: '),
 'zbudujTytul: odmieniona nazwa gminy to nie to samo slowo - prefiks ma zostac dopisany');
 
-const LICZBA_WARUNKOW = 73;
+const LICZBA_WARUNKOW = 77;
 
 function uruchomTesty() {
   return { sprawdzonych: LICZBA_WARUNKOW, bledy };
