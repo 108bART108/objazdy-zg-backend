@@ -26,7 +26,7 @@ const { sanitizeItems, limitOpisu, LIMIT_ZRODLA } = require('./sanitize');
 // --- 1. kontrakt scraperow --------------------------------------------------
 // Kazdy scraper moze zabezpieczyc sie przed zepsuta strona, ale wylacznie
 // wspolna stala LIMIT_ZRODLA. Wlasna liczba w tym miejscu = cichy ubytek.
-const SCRAPERY = ['enea.js', 'zwik.js', 'zdw.js', 'umZgora.js', 'mzk.js', 'htmlSources.js', 'pzzd.js', 'gminy.js'];
+const SCRAPERY = ['enea.js', 'zwik.js', 'zdw.js', 'umZgora.js', 'mzk.js', 'htmlSources.js', 'pzzd.js', 'gminy.js', 'gminyCms.js'];
 
 // --- 3. znane, swiadome skrocenia -------------------------------------------
 // Kazda liczba ponizej LIMIT_ZRODLA uzyta w .slice(0, N) musi byc tu opisana.

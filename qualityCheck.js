@@ -53,6 +53,21 @@ function fixGluedText(text) {
   );
   // czesty przypadek: "...odpowiedzialnosciaul. Chemiczna" - male "a" + "ul."
   fixed = fixed.replace(/([a-ząćęłńóśźż])(ul\.|al\.|pl\.)\s?([A-ZĄĆĘŁŃÓŚŹŻ])/g, '$1 $2 $3');
+
+  // Brak spacji PO KROPCE konczacej zdanie. Wzorzec wyzej tego nie lapie, bo
+  // miedzy mala i wielka litera stoi kropka. Przyklad z zycia - komunikat
+  // gminy Swidnica z 23.11.2026, przepisany tu doslownie ze zrodla:
+  //     "...na terenie miejscowosci Grabowiec.Za utrudnienia przepraszamy."
+  // Urzad zapomnial spacji, a my przepisywalismy to mieszkancowi tak samo.
+  //
+  // Warunek jest ten sam, co wyzej: po wielkiej literze musi stac mala,
+  // zeby nie rozrywac skrotow ("ZWiK"). Cyfry nie wchodza, wiec "godz.8.00"
+  // i adresy w rodzaju "www.gov.pl" zostaja nietkniete. Przy okazji naprawia
+  // sie tez "ul.Kwiatowa" - tam spacja po kropce powinna byc.
+  fixed = fixed.replace(
+    /([a-ząćęłńóśźż])\.([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż])/g,
+    '$1. $2',
+  );
   return fixed.replace(/\s+/g, ' ').trim();
 }
 

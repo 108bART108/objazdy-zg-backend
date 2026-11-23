@@ -6,6 +6,7 @@ const { fetchZwik } = require('./zwik');
 const { fetchZdw } = require('./zdw');
 const { fetchPzzd } = require('./pzzd');
 const { fetchGminy } = require('./gminy');
+const { fetchGminyCms } = require('./gminyCms');
 const {
   upsertMany, recordSourceResult, markSourceAlerted, recordPushAttempt, dezaktywujDuplikatyTresci,
 } = require('./db');
@@ -133,7 +134,10 @@ const EMPTY_CYCLES_BEFORE_ALERT = 8;
 // dostawalbys push "zrodlo nie odpowiada" za kazdym razem, gdy w gminach
 // po prostu nic sie nie dzieje. Dostepnosci samych kanalow pilnuje licznik
 // bledow pobierania wewnatrz gminy.js.
-const SOURCES_ALLOWED_EMPTY = ['htmlSources', 'gminy'];
+// gminyCms to strony urzedow Swidnicy i Otynia - tam awarii wody moze nie byc
+// przez caly miesiac, wiec zero wpisow jest stanem normalnym. Dostepnosci
+// samych stron pilnuje licznik bledow wewnatrz gminyCms.js.
+const SOURCES_ALLOWED_EMPTY = ['htmlSources', 'gminy', 'gminyCms'];
 
 // Sprawdza, czy ktores zrodlo przestalo zwracac wpisy, i wysyla JEDEN
 // alert push na incydent (oraz jeden, gdy problem sam ustapi).
@@ -170,7 +174,8 @@ async function checkSourcesHealth(perSource) {
 
 async function scrapeAll() {
   const started = Date.now();
-  const [fromRss, fromHtml, fromEnea, fromMzk, fromZwik, fromZdw, fromPzzd, fromGminy] = await Promise.all([
+  const [fromRss, fromHtml, fromEnea, fromMzk, fromZwik, fromZdw, fromPzzd, fromGminy,
+    fromGminyCms] = await Promise.all([
     fetchUmZgora(),
     fetchHtmlSources(),
     fetchEnea(),
@@ -179,6 +184,7 @@ async function scrapeAll() {
     fetchZdw(),
     fetchPzzd(),
     fetchGminy(),
+    fetchGminyCms(),
   ]);
 
   // Centralne, drugie sprawdzenie jakosci - dotyczy WSZYSTKICH zrodel
@@ -199,6 +205,7 @@ async function scrapeAll() {
     zdw: fromZdw,
     pzzd: fromPzzd,
     gminy: fromGminy,
+    gminyCms: fromGminyCms,
   }).catch((err) => console.error('[scrapeAll] blad kontroli zdrowia zrodel:', err.message));
 
   // Centralne czyszczenie tresci - PRZED qualityCheck i przed zapisem.
@@ -215,7 +222,7 @@ async function scrapeAll() {
   // naprawde zobaczy mieszkaniec, a nie wersje ze smieciami CMS-a.
   const { items: oczyszczone, warnings: ostrzezeniaTresci } = sanitizeItems(
     [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk, ...fromZwik, ...fromZdw,
-      ...fromPzzd, ...fromGminy],
+      ...fromPzzd, ...fromGminy, ...fromGminyCms],
   );
 
   // Kazde ostrzezenie wypisujemy RAZ na uruchomienie serwera, a nie co cykl.

@@ -147,6 +147,7 @@ const TESTY_TRESCI = [
   ['komunikaty PZZD', './testPzzd'],
   ['odsiewanie duplikatow', './testDuplikaty'],
   ['wodociagi w gminach', './testGminy'],
+  ['komunikaty ze stron gmin', './testGminyCms'],
   ['wyszukiwanie ulic', './testSzukania'],
 ];
 
