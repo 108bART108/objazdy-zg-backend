@@ -32,16 +32,26 @@ const NAGLOWKI = {
   'Accept-Language': 'pl-PL,pl;q=0.9',
 };
 
+// "kategoria" jest przypisana ZRODLU, a nie zgadywana z tresci. Oba te
+// podmioty zajmuja sie woda i sciekami - nie publikuja komunikatow o pradzie.
+// Proba na zywo (sonda nr 7) pokazala, do czego prowadzi zgadywanie:
+// komunikat Spolki Wodno-Sciekowej o pekniętym rurociagu w Pierzwinie brzmi
+// "w wyniku prac zwiazanych z kladzeniem sieci ENERGETYCZNEJ doszlo do
+// uszkodzenia glownego RUROCIAGU" - i nie pada w nim ani razu slowo "woda".
+// Klasyfikator zobaczyl "energetycznej", nie zobaczyl wody i wrzucil awarie
+// wodociagu do zakladki "prad". Zrodlo wie o sobie wiecej niz wzorzec.
 const ZRODLA = [
   {
     gmina: 'Czerwieńsk',
     zrodlo: 'POMAK Czerwieńsk',
     kanal: 'https://www.pomak.pl/?format=feed&type=rss',
+    kategoria: 'wodociagi',
   },
   {
     gmina: 'Nowogród Bobrzański',
     zrodlo: 'Spółka Wodno-Ściekowa Nowogród Bobrzański',
     kanal: 'https://spwsnow.pl/?feed=rss2',
+    kategoria: 'wodociagi',
   },
 ];
 
@@ -61,15 +71,37 @@ const stanKanalow = new Map();
 // o awarii, ktora juz sie skonczyla - a przy swiezej dacie poszedlby jeszcze
 // push. Nie przepisujemy tekstu urzedu; dopisujemy wlasny znacznik do tytulu,
 // zeby bylo to widoczne od razu, bez czytania calosci.
+// WZORZEC WYMAGA FORMY DOKONANEJ. Pierwsza wersja lapala sam rzeczownik
+// "przywrocenie dostaw" - i proba na zywo pokazala, czym to grozi.
+// W komunikacie POMAK-u z 23.11.2026 o Plotach i Zagorzu stoi zdanie:
+//     "przewidywany czas przywrocenia dostaw wody to okolo godziny 13:00"
+// To PROGNOZA, a nie koniec awarii. Trwajaca awaria dostala wiec w tytule
+// "(zakonczona)" - czyli mieszkancy Plotow przeczytaliby, ze woda juz jest,
+// w trakcie jej braku. Filtr obietnic tego nie zatrzymal, bo w tym zdaniu
+// nie ma slowa "poinformujemy".
+//
+// Dlatego nie wyliczamy juz, co NIE jest odwolaniem - wymagamy dowodu, ze
+// cos sie STALO: formy dokonanej ("zostala przywrocona", "przywrocono",
+// "usunieto"). Prognoza i obietnica takiej formy nie maja, wiec odpadaja
+// same, bez kolejnych wyjatkow. Filtr obietnic zostaje jako druga siatka.
 const ODWOLANIE_RE = new RegExp([
-  'przywr[óo]cen\\w*\\s+dostaw',
   'przywr[óo]cono',
-  'dostaw\\w*\\s+wody\\s+(zosta[łl]a\\s+)?przywr[óo]con',
-  'wod[aę]\\s+(zosta[łl]a\\s+)?przywr[óo]con',
-  'usuni[ęe]t\\w*\\s+awari',
+  'zosta[łl][aoy]?\\s+przywr[óo]con',
+  '(dostaw\\w*|wod[aę]|woda|zasilani\\w*)\\s+przywr[óo]con',
   'usuni[ęe]to\\s+awari',
-  'awaria\\s+(zosta[łl]a\\s+)?usuni[ęe]t',
+  'awari\\w*\\s+(zosta[łl]a\\s+)?usuni[ęe]t',
+  'jest\\s+ju[żz]\\s+dost[ęe]pna',
+  // "Informujemy o przywroceniu dostawy wody" - czas terazniejszy, czyli
+  // rzecz juz sie stala. Wzorzec jest waski celowo: samo "przywrocenie"
+  // wystepuje tez w prognozach ("przewidywany czas przywrocenia").
+  'informujemy\\s+o\\s+przywr[óo]ceni',
 ].join('|'), 'i');
+
+// Osobne, luzniejsze pytanie: czy TYTUL wpisu sam w sobie jest komunikatem
+// o przywroceniu ("Przywrocenie dostawy wody", "Awaria usunieta"). Takiemu
+// wpisowi nie dopisujemy "(zakonczona)", bo brzmialoby to absurdalnie.
+// Tu wystarcza rzeczownik - w tytule nikt nie pisze prognoz.
+const TYTUL_O_PRZYWROCENIU_RE = /przywr[óo]cen|usuni[ęe]t|jest\s+ju[żz]\s+dost[ęe]pna/i;
 
 // ...ale sam ten wzorzec nie wystarcza i o tym powiedzial mi wlasny test.
 // W komunikacie o Plotach stoi zdanie: "O przywroceniu dostaw wody
@@ -109,14 +141,30 @@ function czyOdwolana(tekst) {
 // "ul. Letniej w godzinach od 9". W appce to pole stoi pod tytulem jako
 // nazwa miejsca, wiec taki ogon wyglada jak blad. Nie zmieniam funkcji
 // wspolnej - przycinam jej wynik tutaj, u siebie.
+const MAX_DL_MIEJSCA = 60;
+
+// Skroty, po ktorych kropka NIE konczy zdania - inaczej "ul. Szkolnej"
+// zostaloby przyciete do pustego napisu zaraz za "ul.".
+const SKROTY = ['ul', 'al', 'os', 'pl', 'św', 'gen', 'ks', 'm', 'mjr', 'ppłk', 'płk', 'dr', 'nr'];
+const KONIEC_ZDANIA_RE = new RegExp(`(?<!\\b(?:${SKROTY.join('|')}))\\.\\s+[A-ZĄĆĘŁŃÓŚŹŻ].*$`, 'u');
+
 function przytnijMiejsce(nazwa) {
   if (!nazwa) return null;
   const przyciete = String(nazwa)
+    // Proba na zywo dala "ul. Szkolnej w Plotach. Przerwa spo" - extractStreet
+    // przeszedl przez kropke do nastepnego zdania. Ucinamy na granicy zdania,
+    // ale z pominieciem skrotow w rodzaju "ul." i "al.".
+    .replace(KONIEC_ZDANIA_RE, '')
     .replace(/\s+w\s+(godzinach|godzinie|godz|dniu|dniach|okresie).*$/i, '')
     .replace(/\s+(od|do)\s+.*$/i, '')
     .replace(/[\s,;:.–—-]+$/, '')
     .trim();
-  return przyciete.length >= 3 ? przyciete : null;
+
+  if (przyciete.length < 3) return null;
+  // Dluga nazwa to znak, ze wzorzec zlapal pol zdania, a nie nazwe miejsca.
+  // Lepiej nie pokazac nic niz pokazac urwany fragment opisu.
+  if (przyciete.length > MAX_DL_MIEJSCA) return null;
+  return przyciete;
 }
 
 const MIEJSCOWOSC_RE = /\bw\s+(?:m\.|miejscowo[śs]ci)\s+([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż-]{2,})/;
@@ -178,9 +226,13 @@ function wykryjMiejsce(tytul, opis) {
  * Zamienia wpisy kanalu na wpisy appki. Bez sieci - zeby dalo sie to
  * sprawdzic testem na prawdziwych danych z kanalu.
  */
+// Ponizej tylu znakow opis nie niesie zadnej informacji poza tytulem.
+const MIN_DL_OPISU = 40;
+
 function przetworzWpisy(zrodlo, items) {
   const wyniki = [];
   let pominietych = 0;
+  const bezTresci = [];
 
   for (const item of items || []) {
     const tytulZrodla = String(item.title || '').replace(/\s+/g, ' ').trim();
@@ -191,13 +243,33 @@ function przetworzWpisy(zrodlo, items) {
     }
 
     const opis = wyciagOpis(item);
-    const kategoria = kategoriaWpisu(tytulZrodla, opis);
-    if (!kategoria) {
+
+    // Kanal Spolki Wodno-Sciekowej wysyla czesc wpisow z PUSTA trescia -
+    // zostaje sam tytul, i to tytul nic nie mowiacy: "KOMUNIKAT", "Awaria",
+    // "Uwaga mieszkancy". Proba na zywo pokazala, ze tak wyglada 8 z 10
+    // pozycji w tym kanale, a wsrod nich prawdziwe awarie.
+    //
+    // Takiego wpisu NIE wpuszczamy do appki: "Nowogrod Bobrzanski: Awaria"
+    // bez jednego zdania tresci nie mowi mieszkancowi ani gdzie, ani kiedy,
+    // ani czego dotyczy - a zajmuje miejsce i wyglada jak pelna informacja.
+    // Zbieramy je osobno, zeby bylo widac w logu, ile tresci tracimy; docelowo
+    // trzeba je dociagac z podstrony, tak jak przy ZWiK-u.
+    if (opis.length < MIN_DL_OPISU) {
+      bezTresci.push(tytulZrodla);
       pominietych += 1;
       continue;
     }
 
-    const zakonczona = czyOdwolana(`${tytulZrodla} ${opis}`) && !ODWOLANIE_RE.test(tytulZrodla);
+    // Klasyfikator sluzy tu wylacznie za FILTR - rozstrzyga, czy wpis w ogole
+    // jest komunikatem o przerwie. Kategorie bierzemy ze zrodla, bo to ono
+    // wie, czym sie zajmuje (patrz komentarz przy ZRODLA).
+    if (!kategoriaWpisu(tytulZrodla, opis)) {
+      pominietych += 1;
+      continue;
+    }
+
+    const zakonczona = czyOdwolana(`${tytulZrodla} ${opis}`)
+      && !TYTUL_O_PRZYWROCENIU_RE.test(tytulZrodla);
 
     const eventDate = extractPolishDate(opis) || extractPolishDate(tytulZrodla);
     const publikacja = item.isoDate || item.pubDate || null;
@@ -205,16 +277,16 @@ function przetworzWpisy(zrodlo, items) {
     wyniki.push(qualityCheck({
       source_url: link,
       source_name: zrodlo.zrodlo,
-      category: kategoria,
+      category: zrodlo.kategoria,
       title: zbudujTytul(zrodlo.gmina, tytulZrodla, zakonczona),
       street: wykryjMiejsce(tytulZrodla, opis),
-      description: opis || tytulZrodla,
+      description: opis,
       published_at: publikacja ? new Date(publikacja).toISOString() : null,
       event_date: eventDate ? eventDate.toISOString() : null,
     }));
   }
 
-  return { wyniki, pominietych };
+  return { wyniki, pominietych, bezTresci };
 }
 
 function odnotujBlad(zrodlo, szczegol) {
@@ -257,12 +329,19 @@ async function fetchGminy() {
     try {
       const xml = await pobierzKanal(zrodlo.kanal);
       const kanal = await new Parser().parseString(xml);
-      const { wyniki, pominietych } = przetworzWpisy(zrodlo, kanal.items);
+      const { wyniki, pominietych, bezTresci } = przetworzWpisy(zrodlo, kanal.items);
 
       odnotujSukces(zrodlo);
       wszystkie.push(...wyniki);
       podsumowanie.push(`${zrodlo.gmina}: ${(kanal.items || []).length} w kanale, `
         + `${wyniki.length} o wodzie, ${pominietych} pominietych`);
+
+      // Widac od razu, ile informacji tracimy przez pusta tresc w kanale.
+      if (bezTresci.length) {
+        console.warn(`[gminy] ${zrodlo.gmina}: ${bezTresci.length} wpisow bez tresci w kanale `
+          + `(${bezTresci.map((t) => `"${t}"`).join(', ')}) - do appki nie weszly, `
+          + 'bo sam tytul nie mowi mieszkancowi gdzie ani kiedy');
+      }
 
       for (const w of wyniki) {
         if (w.needs_review) {
@@ -288,6 +367,7 @@ module.exports = {
   wykryjMiejsce,
   ZRODLA,
   ODWOLANIE_RE,
+  TYTUL_O_PRZYWROCENIU_RE,
   czyOdwolana,
   przytnijMiejsce,
 };
