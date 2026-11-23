@@ -5,6 +5,7 @@ const { fetchMzk } = require('./mzk');
 const { fetchZwik } = require('./zwik');
 const { fetchZdw } = require('./zdw');
 const { fetchPzzd } = require('./pzzd');
+const { fetchGminy } = require('./gminy');
 const {
   upsertMany, recordSourceResult, markSourceAlerted, recordPushAttempt, dezaktywujDuplikatyTresci,
 } = require('./db');
@@ -125,7 +126,14 @@ const EMPTY_CYCLES_BEFORE_ALERT = 8;
 // PZZD publikuje okolo szesciu komunikatow w roku i NIE kasuje starych
 // pozycji z zakladki, wiec pusta lista oznacza tam awarie strony, nie brak
 // utrudnien - dlatego pilnujemy go normalnie, razem z pozostalymi.
-const SOURCES_ALLOWED_EMPTY = ['htmlSources'];
+// "gminy" (wodociagi w Czerwiensku i Nowogrodzie Bobrzanskim) trafia tutaj
+// z innego powodu niz htmlSources. Te kanaly RSS zawieraja TYLKO biezace
+// komunikaty i caly miesiac moga nie miec zadnej awarii - pusty wynik jest
+// wiec stanem normalnym, nie awaria zrodla. Gdyby go pilnowac jak pozostalych,
+// dostawalbys push "zrodlo nie odpowiada" za kazdym razem, gdy w gminach
+// po prostu nic sie nie dzieje. Dostepnosci samych kanalow pilnuje licznik
+// bledow pobierania wewnatrz gminy.js.
+const SOURCES_ALLOWED_EMPTY = ['htmlSources', 'gminy'];
 
 // Sprawdza, czy ktores zrodlo przestalo zwracac wpisy, i wysyla JEDEN
 // alert push na incydent (oraz jeden, gdy problem sam ustapi).
@@ -162,7 +170,7 @@ async function checkSourcesHealth(perSource) {
 
 async function scrapeAll() {
   const started = Date.now();
-  const [fromRss, fromHtml, fromEnea, fromMzk, fromZwik, fromZdw, fromPzzd] = await Promise.all([
+  const [fromRss, fromHtml, fromEnea, fromMzk, fromZwik, fromZdw, fromPzzd, fromGminy] = await Promise.all([
     fetchUmZgora(),
     fetchHtmlSources(),
     fetchEnea(),
@@ -170,6 +178,7 @@ async function scrapeAll() {
     fetchZwik(),
     fetchZdw(),
     fetchPzzd(),
+    fetchGminy(),
   ]);
 
   // Centralne, drugie sprawdzenie jakosci - dotyczy WSZYSTKICH zrodel
@@ -189,6 +198,7 @@ async function scrapeAll() {
     zwik: fromZwik,
     zdw: fromZdw,
     pzzd: fromPzzd,
+    gminy: fromGminy,
   }).catch((err) => console.error('[scrapeAll] blad kontroli zdrowia zrodel:', err.message));
 
   // Centralne czyszczenie tresci - PRZED qualityCheck i przed zapisem.
@@ -204,7 +214,8 @@ async function scrapeAll() {
   // Czyscimy przed qualityCheck, zeby kontrola jakosci oceniala tekst, ktory
   // naprawde zobaczy mieszkaniec, a nie wersje ze smieciami CMS-a.
   const { items: oczyszczone, warnings: ostrzezeniaTresci } = sanitizeItems(
-    [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk, ...fromZwik, ...fromZdw, ...fromPzzd],
+    [...fromRss, ...fromHtml, ...fromEnea, ...fromMzk, ...fromZwik, ...fromZdw,
+      ...fromPzzd, ...fromGminy],
   );
 
   // Kazde ostrzezenie wypisujemy RAZ na uruchomienie serwera, a nie co cykl.

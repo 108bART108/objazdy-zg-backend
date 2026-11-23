@@ -146,6 +146,8 @@ const TESTY_TRESCI = [
   ['obciecia tresci', './testObciecia'],
   ['komunikaty PZZD', './testPzzd'],
   ['odsiewanie duplikatow', './testDuplikaty'],
+  ['wodociagi w gminach', './testGminy'],
+  ['wyszukiwanie ulic', './testSzukania'],
 ];
 
 function sprawdzTresc() {

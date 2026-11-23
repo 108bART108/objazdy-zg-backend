@@ -6,6 +6,7 @@ const { fetchMzk } = require('./mzk');
 const { fetchZwik } = require('./zwik');
 const { fetchZdw } = require('./zdw');
 const { fetchPzzd } = require('./pzzd');
+const { fetchGminy } = require('./gminy');
 const { scanItem } = require('./sanitize');
 const webpush = require('web-push');
 
@@ -26,6 +27,7 @@ async function runHealthCheck() {
     { name: 'MZK', fn: fetchMzk },
     { name: 'Enea', fn: fetchEnea },
     { name: 'PZZD (drogi powiatowe)', fn: fetchPzzd },
+    { name: 'Wodociagi w gminach (Czerwiensk, Nowogrod Bobrz.)', fn: fetchGminy },
     { name: 'htmlSources (generyczne)', fn: fetchHtmlSources },
   ];
 
