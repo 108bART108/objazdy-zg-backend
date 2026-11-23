@@ -94,6 +94,37 @@ db.exec(`
     has_problem INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
+
+  -- Anonimowe liczniki uzycia appki. Jeden wiersz = jedna sesja, zapisany
+  -- raz, gdy mieszkaniec zamyka appke albo przechodzi do innej.
+  --
+  -- CZEGO TU NIE MA I NIGDY NIE BEDZIE: adresu IP, identyfikatora
+  -- urzadzenia, ciasteczka, lokalizacji - niczego, co pozwoliloby powiazac
+  -- dwie sesje z ta sama osoba. Zapisujemy wylacznie liczby.
+  --
+  -- PO CO: zeby odpowiedziec liczbami na pytanie, czy wyszukiwarka skraca
+  -- sesje i odbiera odslony reklamodawcom. Rozstrzyga o tym porownanie
+  -- sesji Z wyszukiwaniem i BEZ niego - stad te dwie kolumny obok siebie.
+  CREATE TABLE IF NOT EXISTS metryki_sesji (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    czas_s INTEGER NOT NULL DEFAULT 0,
+    wyszukiwan INTEGER NOT NULL DEFAULT 0,
+    pustych INTEGER NOT NULL DEFAULT 0,
+    odslon_reklam INTEGER NOT NULL DEFAULT 0,
+    przelaczen INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  -- Frazy, ktore NIE DALY zadnego wyniku. To najcenniejszy sygnal, jaki
+  -- mozna stad wyciagnac: mowi, czego mieszkancy szukaja, a czego appka nie
+  -- pokrywa. Jesli zacznie sie tu powtarzac "Sulechow", bedzie to argument
+  -- za dolozeniem tego zrodla mocniejszy niz jakiekolwiek moje przypuszczenie.
+  -- Zapisujemy sama fraze, bez zadnego powiazania z osoba czy sesja.
+  CREATE TABLE IF NOT EXISTS metryki_pytania (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fraza TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
 `);
 
 const migrations = [
@@ -604,6 +635,116 @@ function checkPushSilence() {
 }
 
 // Podsumowanie dla panelu admina: ile powiadomien wyszlo w ostatnich dniach.
+// ======================= ANONIMOWE LICZNIKI UZYCIA ==========================
+
+// Granice rozsadku dla danych przychodzacych z appki. Endpoint jest publiczny,
+// wiec przyjmujemy, ze moze do niego trafic cokolwiek - od pomylki w kodzie
+// po celowe smieci. Wartosci spoza zakresu przycinamy, zamiast zapisywac
+// liczby, ktore pozniej wykrzywialyby srednie.
+const MAX_CZAS_SESJI_S = 4 * 3600;     // dluzsza sesja to zapomniana karta
+const MAX_LICZNIK = 500;
+const MIN_CZAS_SESJI_S = 2;            // ponizej to zwykle przeladowanie strony
+const MAX_DL_FRAZY = 40;
+const MAX_FRAZ_NA_SESJE = 5;
+const DNI_PRZECHOWYWANIA_METRYK = 90;
+
+function doZakresu(wartosc, max) {
+  const n = Number(wartosc);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(Math.round(n), max);
+}
+
+/**
+ * Zapisuje jedna sesje. Zwraca true, gdy wiersz trafil do bazy.
+ * Sesje krotsze niz dwie sekundy pomijamy - to zwykle przeladowanie strony
+ * albo bot, a nie wizyta mieszkanca.
+ */
+function zapiszSesje(dane = {}) {
+  const czas = doZakresu(dane.czas_s, MAX_CZAS_SESJI_S);
+  if (czas < MIN_CZAS_SESJI_S) return false;
+
+  db.prepare(`
+    INSERT INTO metryki_sesji (czas_s, wyszukiwan, pustych, odslon_reklam, przelaczen)
+    VALUES (@czas_s, @wyszukiwan, @pustych, @odslon_reklam, @przelaczen)
+  `).run({
+    czas_s: czas,
+    wyszukiwan: doZakresu(dane.wyszukiwan, MAX_LICZNIK),
+    pustych: doZakresu(dane.pustych, MAX_LICZNIK),
+    odslon_reklam: doZakresu(dane.odslon_reklam, MAX_LICZNIK),
+    przelaczen: doZakresu(dane.przelaczen, MAX_LICZNIK),
+  });
+
+  const frazy = Array.isArray(dane.puste_frazy) ? dane.puste_frazy : [];
+  const wstaw = db.prepare('INSERT INTO metryki_pytania (fraza) VALUES (?)');
+  for (const surowa of frazy.slice(0, MAX_FRAZ_NA_SESJE)) {
+    const fraza = String(surowa || '').replace(/\s+/g, ' ').trim().slice(0, MAX_DL_FRAZY);
+    if (fraza.length >= 2) wstaw.run(fraza);
+  }
+  return true;
+}
+
+/**
+ * Zestawienie dla panelu. Sedno to dwie kolumny obok siebie: sesje
+ * Z wyszukiwaniem i BEZ niego. Jesli te pierwsze sa krotsze i maja mniej
+ * odslon reklam, obawa o reklamodawcow byla sluszna. Jesli nie - nie byla.
+ */
+function getMetryki(days = 14) {
+  const od = new Date(Date.now() - days * 86400000).toISOString();
+
+  const grupa = (warunek) => db.prepare(`
+    SELECT COUNT(*) AS sesji,
+           COALESCE(AVG(czas_s), 0) AS sredniCzas,
+           COALESCE(AVG(odslon_reklam), 0) AS srednieOdslony,
+           COALESCE(SUM(odslon_reklam), 0) AS odslonyRazem,
+           COALESCE(AVG(przelaczen), 0) AS sredniePrzelaczenia
+    FROM metryki_sesji WHERE created_at >= ? AND ${warunek}
+  `).get(od);
+
+  const zWyszukiwaniem = grupa('wyszukiwan > 0');
+  const bezWyszukiwania = grupa('wyszukiwan = 0');
+
+  const ogolem = db.prepare(`
+    SELECT COUNT(*) AS sesji,
+           COALESCE(SUM(wyszukiwan), 0) AS wyszukiwanRazem,
+           COALESCE(SUM(pustych), 0) AS pustychRazem,
+           COALESCE(SUM(odslon_reklam), 0) AS odslonyRazem
+    FROM metryki_sesji WHERE created_at >= ?
+  `).get(od);
+
+  const pierwsza = db.prepare('SELECT created_at FROM metryki_sesji ORDER BY id ASC LIMIT 1').get();
+
+  const pustePytania = db.prepare(`
+    SELECT fraza, COUNT(*) AS ile FROM metryki_pytania
+    WHERE created_at >= ? GROUP BY LOWER(fraza) ORDER BY ile DESC, fraza ASC LIMIT 12
+  `).all(od);
+
+  return {
+    dni: days,
+    zbieraOd: pierwsza ? pierwsza.created_at : null,
+    ogolem,
+    zWyszukiwaniem,
+    bezWyszukiwania,
+    pustePytania,
+  };
+}
+
+// Metryki nie sa archiwum - po trzech miesiacach nie powiedza juz nic,
+// czego nie widac w swiezszych danych, a baza na Renderze jest mala.
+function przytnijMetryki() {
+  const granica = new Date(Date.now() - DNI_PRZECHOWYWANIA_METRYK * 86400000).toISOString();
+  const a = db.prepare('DELETE FROM metryki_sesji WHERE created_at < ?').run(granica);
+  const b = db.prepare('DELETE FROM metryki_pytania WHERE created_at < ?').run(granica);
+  const razem = a.changes + b.changes;
+  if (razem) console.log(`[db] usunieto ${razem} metryk starszych niz ${DNI_PRZECHOWYWANIA_METRYK} dni`);
+  return razem;
+}
+
+try {
+  przytnijMetryki();
+} catch (err) {
+  console.error('[db] blad przycinania metryk:', err.message);
+}
+
 function getPushStats(days = 7) {
   const start = getPushLogStart();
   const oknoOd = new Date(Date.now() - days * 86400000);
@@ -821,6 +962,9 @@ module.exports = {
   listUtrudnienia,
   getDescriptionsByUrls,
   policzWKategoriach,
+  zapiszSesje,
+  getMetryki,
+  przytnijMetryki,
   dezaktywujDuplikatyTresci,
   wskazDuplikaty,
   MIN_OPIS_DUPLIKATU,

@@ -10,7 +10,7 @@ const {
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
   listHealthReports, listSourceHealth, listSubscriptionSummary,
   checkPushSilence, getPushStats, recordPushAttempt, ensurePushLogStarted,
-  policzWKategoriach,
+  policzWKategoriach, zapiszSesje, getMetryki,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
@@ -110,6 +110,43 @@ app.get('/api/ciekawostka', async (_req, res) => {
 
 // Wymusza usuniecie dzisiejszej ciekawostki i wygenerowanie nowej -
 // przydatne, gdy dzisiejsza wersja okaze sie wadliwa.
+// Anonimowe liczniki uzycia. Appka wysyla JEDEN raz na sesje, w momencie
+// zamkniecia albo przejscia w tlo, same liczby: ile sekund trwala wizyta,
+// ile razy uzyto wyszukiwarki, ile reklam zobaczyl mieszkaniec.
+//
+// Endpoint jest publiczny, bo wysyla do niego kazde urzadzenie - i dlatego
+// NIC stad nie ufamy: wszystkie wartosci sa przycinane do rozsadnych
+// zakresow w zapiszSesje(). Nie zapisujemy adresu IP ani niczego, co
+// pozwoliloby powiazac dwie sesje z ta sama osoba.
+//
+// Odpowiadamy 204 zawsze, takze przy bledzie. Licznik uzycia nie moze
+// pokazywac mieszkancowi bledu ani niczego go kosztowac - to nasze
+// narzedzie, nie jego sprawa.
+// Appka wysyla to przez sendBeacon z typem text/plain - inaczej przegladarka
+// zadalaby zapytania wstepnego CORS, ktorego beacon nie potrafi wykonac
+// i po cichu nie wyslalaby nic. Dlatego obok globalnego parsera JSON stoi
+// tu drugi, od zwyklego tekstu; body-parser pomija ciało juz odczytane,
+// wiec oba sposoby dzialaja obok siebie.
+app.post('/api/metryki', express.text({ type: 'text/plain', limit: '4kb' }), (req, res) => {
+  try {
+    const dane = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+    zapiszSesje(dane);
+  } catch (err) {
+    console.error('[metryki] nie udalo sie zapisac sesji:', err.message);
+  }
+  res.status(204).end();
+});
+
+app.get('/api/admin/metryki', (req, res) => {
+  // Trasy administracyjne NIE sa w tym projekcie chronione wspolnym
+  // straznikiem - kazda sprawdza klucz sama. Latwo o tym zapomniec przy
+  // dopisywaniu nowej (mnie sie wlasnie zdarzylo), a wtedy dane wychodza
+  // na zewnatrz bez zadnej kontroli.
+  if (!checkAdmin(req, res)) return;
+  const dni = Number(req.query.dni);
+  res.json(getMetryki(Number.isFinite(dni) && dni > 0 && dni <= 365 ? Math.round(dni) : 14));
+});
+
 app.post('/api/admin/ciekawostka/regenerate', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
