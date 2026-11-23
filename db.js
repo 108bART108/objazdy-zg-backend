@@ -1,5 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const { szukaj, normalizujKategorie, policzKategorie } = require('./szukanie');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'objazdy.db');
 
@@ -369,6 +370,36 @@ function getDescriptionsByUrls(urls) {
   return new Map(rows.map((r) => [r.source_url, r.description]));
 }
 
+// Ile wierszy wyciagamy z bazy, gdy mieszkaniec czegos szuka. Filtr polski
+// dziala w pamieci, wiec musi dostac szerszy zestaw niz sama pierwsza strona.
+// Przy kilkudziesieciu aktywnych wpisach to i tak caly stan appki; gdyby
+// kiedys bylo ich dziesiatki tysiecy, trzeba bedzie wrocic do indeksu w bazie.
+const LIMIT_DO_SZUKANIA = 500;
+
+// Nieznana kategoria to blad frontendu, nie mieszkanca - zglaszamy ja raz na
+// uruchomienie, zeby nie zasypac logu przy kazdym odswiezeniu listy.
+const zgloszoneKategorie = new Set();
+function ostrzezOKategorii(kategoria) {
+  const tresc = `[db] nieznana kategoria "${kategoria}" - pokazuje wszystkie wpisy`;
+  if (zgloszoneKategorie.has(tresc)) return;
+  zgloszoneKategorie.add(tresc);
+  console.warn(tresc);
+}
+
+/**
+ * Ile wpisow pasuje do frazy w kazdej kategorii osobno - niezaleznie od tego,
+ * w ktorej zakladce stoi mieszkaniec. Dzieki temu appka moze powiedziec
+ * "w drogach nic nie ma, ale sa 2 wyniki w wodociagach".
+ */
+function policzWKategoriach({ search } = {}) {
+  if (!search || !String(search).trim()) return null;
+  const wiersze = db.prepare(
+    'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0 '
+    + 'ORDER BY published_at DESC LIMIT @limit',
+  ).all({ limit: LIMIT_DO_SZUKANIA });
+  return policzKategorie(wiersze, search);
+}
+
 function listUtrudnienia({ category, search, limit = 50 } = {}) {
   // needs_review = 0: appka pokazuje tylko wpisy, ktore przeszly
   // automatyczne sprawdzenie jakosci (qualityCheck) bez zastrzezen.
@@ -378,14 +409,24 @@ function listUtrudnienia({ category, search, limit = 50 } = {}) {
   let query = 'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0';
   const params = {};
 
-  if (category && category !== 'all') {
+  // Kategorie sprowadzamy do nazwy z bazy. Wczesniej porownanie bylo
+  // doslowne, wiec "ALL", "Drogi", a zwlaszcza "wodociągi" i "prąd" pisane
+  // tak, jak nazywaja sie ZAKLADKI w appce, po cichu zwracaly pusta liste -
+  // czyli ekran nie do odroznienia od "nie ma zadnych utrudnien".
+  const { kategoria, rozpoznana } = normalizujKategorie(category);
+  if (!rozpoznana) ostrzezOKategorii(category);
+  if (kategoria) {
     query += ' AND category = @category';
-    params.category = category;
+    params.category = kategoria;
   }
-  if (search) {
-    query += ' AND (title LIKE @search OR street LIKE @search OR description LIKE @search)';
-    params.search = `%${search}%`;
-  }
+  // UWAGA: szukania NIE robimy juz w SQL. Powod jest konkretny i sprawdzony
+  // na prawdziwych wpisach appki: LIKE w SQLite rozroznia wielkosc liter
+  // tylko dla ASCII i nie sprowadza ogonkow do liter bez ogonkow. Z 21
+  // zapytan wpisanych tak, jak pisze je mieszkaniec na telefonie, dzialalo
+  // 13 - a wsrod niedzialajacych byly "Dabrowskiego", "Ploty", "jasinskiego"
+  // i "swidnica". Czyli kto nie stawia ogonkow, nie znajduje WLASNEJ ulicy.
+  // Dopasowanie po polsku robi szukanie.js, juz po wyjeciu wierszy z bazy.
+  // Przy kilkudziesieciu aktywnych wpisach to natychmiastowe.
   // Sortowanie: ZAWSZE od najnowiej opublikowanego wpisu do najstarszego,
   // niezaleznie od tego czy wpis ma zaplanowana przyszla event_date.
   // event_date sluzy WYLACZNIE do wyswietlenia zoltej plakietki
@@ -394,9 +435,16 @@ function listUtrudnienia({ category, search, limit = 50 } = {}) {
   // bledzie parsowania daty potrafilo wywindowac stary wpis ponad nowsze
   // - stąd ta zmiana.)
   query += ' ORDER BY published_at DESC LIMIT @limit';
-  params.limit = limit;
 
-  return db.prepare(query).all(params);
+  // Przy szukaniu bierzemy z bazy szerzej niz prosi appka, bo filtr dziala
+  // dopiero potem - inaczej szukalibysmy wylacznie wsrod pierwszych 50
+  // wpisow i starsza awaria na tej samej ulicy nigdy by sie nie pokazala.
+  params.limit = search ? Math.max(limit, LIMIT_DO_SZUKANIA) : limit;
+
+  const wiersze = db.prepare(query).all(params);
+  if (!search) return wiersze;
+
+  return szukaj(wiersze, search).slice(0, limit);
 }
 
 function getDailyFact(date) {
@@ -772,6 +820,7 @@ module.exports = {
   upsertMany,
   listUtrudnienia,
   getDescriptionsByUrls,
+  policzWKategoriach,
   dezaktywujDuplikatyTresci,
   wskazDuplikaty,
   MIN_OPIS_DUPLIKATU,

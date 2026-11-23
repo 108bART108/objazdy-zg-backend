@@ -10,6 +10,7 @@ const {
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
   listHealthReports, listSourceHealth, listSubscriptionSummary,
   checkPushSilence, getPushStats, recordPushAttempt, ensurePushLogStarted,
+  policzWKategoriach,
 } = require('./db');
 const { scrapeAll } = require('./scrapeAll');
 const { getTodayFact, forceRegenerateTodayFact } = require('./ciekawostka');
@@ -79,7 +80,17 @@ app.get('/api/utrudnienia', (req, res) => {
     search,
     limit: limit ? Number(limit) : 50,
   });
-  res.json({ count: items.length, items });
+
+  // Przy szukaniu dokladamy liczbe trafien w KAZDEJ kategorii. Dzieki temu
+  // appka moze napisac "w drogach nic nie ma, ale sa 2 wyniki w wodociagach"
+  // zamiast pokazac pusty ekran komus, kto szuka swojej ulicy i po prostu
+  // stoi w zlej zakladce. Pole jest dodatkowe - starsza wersja appki,
+  // ktora go nie zna, po prostu je zignoruje.
+  const wKategoriach = policzWKategoriach({ search });
+
+  res.json(wKategoriach
+    ? { count: items.length, items, wKategoriach }
+    : { count: items.length, items });
 });
 
 app.get('/api/ciekawostka', async (_req, res) => {
