@@ -9,8 +9,9 @@
 
 const {
   wyciagListe, wyciagPodstrone, zbudujWpisy, ustalKategorie, dataZCms,
-  trzebaOdswiezyc, ADRES_KOMUNIKATU_RE,
+  trzebaOdswiezyc, ADRES_KOMUNIKATU_RE, ZRODLA_CMS,
 } = require('./gminyCms');
+const { miejsceZGmina } = require('./gminy');
 
 // --- prawdziwe fragmenty stron ---------------------------------------------
 
@@ -330,11 +331,17 @@ function testWpisy() {
   sprawdz('tytul nie jest oznaczony jako zakonczony',
     !/zakończona/i.test(wpis.title));
 
+  // Blad znaleziony na zrzucie z appki 23.11.2026: w naglowku karty stalo
+  // samo "Grabowiec", bo appka pokazuje POLE MIEJSCA, a tytul dopiero wtedy,
+  // gdy miejsca nie ma. Nazwa gminy byla wiec tylko w tytule, czyli nigdzie.
+  rowne('pole miejsca zawiera gmine, bo to ono trafia do naglowka karty',
+    wpis.street, 'Grabowiec (gm. Świdnica)');
+
   rowne('data publikacji wziela sie ze strony, a nie z dzisiejszego dnia',
     dzienLokalny(wpis.published_at), '2026-11-23');
   rowne('data zdarzenia to dzien przerwy, nie dzien publikacji',
     dzienLokalny(wpis.event_date), '2026-11-24');
-  rowne('miejsce rozpoznane z tresci', wpis.street, 'Grabowiec');
+  sprawdz('miejsce rozpoznane z tresci', wpis.street.startsWith('Grabowiec'));
 
   // "Grabowiec.Za utrudnienia" stoi tak w zrodle - urzad zapomnial spacji.
   sprawdz('sklejone zdanie ze zrodla zostalo rozdzielone',
@@ -345,7 +352,7 @@ function testWpisy() {
   sprawdz('komunikat Otynia o wodzie wchodzi do appki', Boolean(wpisOt));
   sprawdz('tytul Otynia zaczyna sie od nazwy gminy',
     wpisOt.title.startsWith('Otyń: '));
-  rowne('miejsce Otynia rozpoznane z tresci', wpisOt.street, 'Niedoradz');
+  rowne('miejsce Otynia zawiera gmine', wpisOt.street, 'Niedoradz (gm. Otyń)');
   rowne('data zdarzenia Otynia to 25 listopada',
     dzienLokalny(wpisOt.event_date), '2026-11-25');
 
@@ -460,6 +467,47 @@ function testOdswiezanie() {
     }, teraz));
 }
 
+// --- 8. nazwa gminy w polu miejsca -----------------------------------------
+
+function testMiejsca() {
+  rowne('do miejscowosci dopisywana jest gmina',
+    miejsceZGmina('Świdnica', 'Grabowiec'), 'Grabowiec (gm. Świdnica)');
+
+  // Bez tego w appce stanaloby "Otyn (gm. Otyn)".
+  rowne('siedziba gminy nie powtarza nazwy dwa razy',
+    miejsceZGmina('Otyń', 'Otyń'), 'Otyń');
+  rowne('ogonki nie psuja rozpoznania powtorzenia',
+    miejsceZGmina('Zabór', 'Zabor'), 'Zabor');
+
+  rowne('brak miejsca zostaje brakiem miejsca',
+    miejsceZGmina('Świdnica', null), null);
+  rowne('ulica tez dostaje gmine',
+    miejsceZGmina('Zabór', 'ul. Lipowa'), 'ul. Lipowa (gm. Zabór)');
+}
+
+// --- 9. konfiguracja zrodel -------------------------------------------------
+
+function testZrodla() {
+  const nazwy = ZRODLA_CMS.map((z) => z.gmina);
+  sprawdz('skonfigurowane sa trzy gminy na tym samym CMS-ie', nazwy.length === 3);
+  ['Świdnica', 'Otyń', 'Zabór'].forEach((g) => {
+    sprawdz(`gmina ${g} jest skonfigurowana`, nazwy.includes(g));
+  });
+
+  const zabor = ZRODLA_CMS.find((z) => z.gmina === 'Zabór');
+  rowne('Zabor ma zadeklarowane dociaganie brakujacego ogniwa',
+    zabor.brakujaceOgniwo, 'www.gminazabor.pl');
+  sprawdz('Zabor laczy sie wylacznie po https',
+    zabor.adresy.every((a) => a.startsWith('https://')));
+
+  // Gdyby ktos kiedys dopisal tu "http://" dla Zaboru, cale dociaganie
+  // ogniwa straciloby sens - tresc szlaby nieszyfrowana mimo calej pracy.
+  ZRODLA_CMS.filter((z) => z.brakujaceOgniwo).forEach((z) => {
+    sprawdz(`${z.gmina}: zrodlo z dociaganym ogniwem nie ma adresu http://`,
+      z.adresy.every((a) => !a.startsWith('http://')));
+  });
+}
+
 function uruchomTesty() {
   bledy.length = 0;
   sprawdzonych = 0;
@@ -470,6 +518,8 @@ function uruchomTesty() {
   testWpisy();
   testOdwolania();
   testOdswiezanie();
+  testMiejsca();
+  testZrodla();
   return { sprawdzonych, bledy };
 }
 

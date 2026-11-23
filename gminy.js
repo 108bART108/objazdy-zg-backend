@@ -169,6 +169,27 @@ function przytnijMiejsce(nazwa) {
 
 const MIEJSCOWOSC_RE = /\bw\s+(?:m\.|miejscowo[śs]ci)\s+([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż-]{2,})/;
 
+/**
+ * Nazwa miejsca z dopisana gmina: "Grabowiec (gm. Swidnica)".
+ *
+ * POWOD. Appka pokazuje w naglowku karty POLE MIEJSCA, a tytul dopiero
+ * wtedy, gdy miejsca nie ma (patrz index.html: street || title). Dopisanie
+ * gminy do samego tytulu bylo wiec martwe wszedzie tam, gdzie udalo sie
+ * rozpoznac miejscowosc - i dokladnie tak sie stalo 23.11.2026: w zakladce
+ * "woda" stalo samo "Grabowiec" i samo "Niedoradz", bez slowa o tym, ze to
+ * gmina Swidnica i gmina Otyn. Mieszkaniec Zielonej Gory nie ma skad
+ * wiedziec, gdzie lezy Grabowiec, a wlasnie po to ta nazwa tam jest.
+ *
+ * Gdy miejscowosc sama jest siedziba gminy ("Otyn" w gminie Otyn), nie
+ * powtarzamy nazwy drugi raz.
+ */
+function miejsceZGmina(gmina, miejsce) {
+  if (!miejsce) return null;
+  if (!gmina) return miejsce;
+  if (bezOgonkow(miejsce).includes(bezOgonkow(gmina))) return miejsce;
+  return `${miejsce} (gm. ${gmina})`;
+}
+
 function bezOgonkow(tekst) {
   return String(tekst || '')
     .toLowerCase()
@@ -290,7 +311,7 @@ function przetworzWpisy(zrodlo, items) {
       source_name: zrodlo.zrodlo,
       category: zrodlo.kategoria,
       title: zbudujTytul(zrodlo.gmina, tytulZrodla, zakonczona),
-      street: wykryjMiejsce(tytulZrodla, opis),
+      street: miejsceZGmina(zrodlo.gmina, wykryjMiejsce(tytulZrodla, opis)),
       // Gdy kanal nie dal tresci, a tytul sam niesie komunikat, opisem
       // zostaje tytul. Powtorzenie w appce jest nieladne, ale uczciwe:
       // tyle wlasnie powiedzial nam urzad. sanitize zglosi to raz w logu.
@@ -384,4 +405,5 @@ module.exports = {
   TYTUL_O_PRZYWROCENIU_RE,
   czyOdwolana,
   przytnijMiejsce,
+  miejsceZGmina,
 };

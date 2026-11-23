@@ -30,8 +30,10 @@
 
 const cheerio = require('cheerio');
 const {
-  zbudujTytul, kategoriaWpisu, czyOdwolana, wykryjMiejsce, TYTUL_O_PRZYWROCENIU_RE,
+  zbudujTytul, kategoriaWpisu, czyOdwolana, wykryjMiejsce, miejsceZGmina,
+  TYTUL_O_PRZYWROCENIU_RE,
 } = require('./gminy');
+const { ogniwoDlaHosta, pobierzZOgniwem } = require('./certyfikaty');
 const { qualityCheck } = require('./qualityCheck');
 const { extractPolishDate } = require('./polishDates');
 const { LIMIT_ZRODLA } = require('./sanitize');
@@ -57,6 +59,17 @@ const ZRODLA_CMS = [
     gmina: 'Otyń',
     zrodlo: 'Gmina Otyń',
     adresy: ['https://www.otyn.pl/', 'http://www.otyn.pl/'],
+  },
+  {
+    gmina: 'Zabór',
+    zrodlo: 'Gmina Zabór',
+    adresy: ['https://www.gminazabor.pl/'],
+    // Serwer gminy Zabor nie przysyla posredniego ogniwa certyfikatu, wiec
+    // Node odmawia polaczenia (UNABLE_TO_VERIFY_LEAF_SIGNATURE). Dociagamy
+    // je tak, jak robi to przegladarka, i sprawdzamy jego podpis - szczegoly
+    // w certyfikaty.js. Weryfikacja polaczenia zostaje WLACZONA; gdy ogniwa
+    // nie da sie wiarygodnie zdobyc, to zrodlo po prostu milczy.
+    brakujaceOgniwo: 'www.gminazabor.pl',
   },
 ];
 
@@ -275,7 +288,9 @@ function zbudujWpisy(zrodlo, strony) {
       source_name: zrodlo.zrodlo,
       category: kategoria,
       title: zbudujTytul(zrodlo.gmina, tytul, zakonczona),
-      street: wykryjMiejsce(tytul, opis),
+      // Nazwa gminy musi byc w POLU MIEJSCA, a nie tylko w tytule - to pole
+      // appka pokazuje w naglowku karty. Patrz komentarz przy miejsceZGmina.
+      street: miejsceZGmina(zrodlo.gmina, wykryjMiejsce(tytul, opis)),
       description: opis,
       published_at: strona.data ? strona.data.toISOString() : null,
       event_date: zdarzenie ? zdarzenie.toISOString() : null,
@@ -334,7 +349,15 @@ function odnotujSukces(zrodlo) {
   stanStron.set(zrodlo.gmina, { bledy: 0, zgloszony: false });
 }
 
-async function pobierz(url) {
+/**
+ * @param {string} url
+ * @param {string|null} ogniwo brakujace ogniwo certyfikatu w postaci PEM.
+ *   Gdy podane, laczymy sie przez certyfikaty.js - z weryfikacja WLACZONA,
+ *   tyle ze z dolozonym ogniwem, ktorego serwer nie przysyla.
+ */
+async function pobierz(url, ogniwo = null) {
+  if (ogniwo) return pobierzZOgniwem(url, ogniwo, NAGLOWKI);
+
   const kontroler = new AbortController();
   const stoper = setTimeout(() => kontroler.abort(), LIMIT_CZASU_MS);
   try {
@@ -346,14 +369,28 @@ async function pobierz(url) {
   }
 }
 
-async function pobierzListe(zrodlo) {
+/**
+ * Zdobywa brakujace ogniwo, jesli zrodlo go wymaga. Rzuca wyjatkiem, gdy sie
+ * nie uda - zrodlo ma wtedy zamilknac, a NIE laczyc sie bez weryfikacji.
+ */
+async function ogniwoDlaZrodla(zrodlo) {
+  if (!zrodlo.brakujaceOgniwo) return null;
+  const pem = await ogniwoDlaHosta(zrodlo.brakujaceOgniwo);
+  if (!pem) {
+    throw new Error('brak wiarygodnego ogniwa certyfikatu - pomijam zrodlo '
+      + '(nie lacze sie bez weryfikacji)');
+  }
+  return pem;
+}
+
+async function pobierzListe(zrodlo, ogniwo) {
   const znany = dzialajacyAdres.get(zrodlo.gmina);
   const kolejka = znany ? [znany, ...zrodlo.adresy.filter((a) => a !== znany)] : zrodlo.adresy;
 
   let ostatniBlad = null;
   for (const adres of kolejka) {
     try {
-      const odp = await pobierz(adres);
+      const odp = await pobierz(adres, ogniwo);
       if (dzialajacyAdres.get(zrodlo.gmina) !== adres) {
         dzialajacyAdres.set(zrodlo.gmina, adres);
         if (adres.startsWith('http://')) {
@@ -370,7 +407,8 @@ async function pobierzListe(zrodlo) {
 }
 
 async function obsluzGmine(zrodlo) {
-  const odp = await pobierzListe(zrodlo);
+  const ogniwo = await ogniwoDlaZrodla(zrodlo);
+  const odp = await pobierzListe(zrodlo, ogniwo);
   const lista = wyciagListe(odp.tekst, odp.koncowyUrl);
   odnotujSukces(zrodlo);
 
@@ -393,7 +431,7 @@ async function obsluzGmine(zrodlo) {
 
     try {
       pobran += 1;
-      const podstrona = await pobierz(wpis.url);
+      const podstrona = await pobierz(wpis.url, ogniwo);
       const dane = wyciagPodstrone(podstrona.tekst);
 
       if (!dane.tytul || dane.opis.length < MIN_DL_OPISU) {
