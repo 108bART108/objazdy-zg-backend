@@ -126,6 +126,26 @@ db.exec(`
     fraza TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
+
+  -- Jeden wiersz = jeden reklamodawca zobaczony w jednej sesji. Nie liczba
+  -- wyswietlen, tylko liczba OSOB, ktore mialy ta reklame na ekranie.
+  --
+  -- Taka liczba da sie obronic przy rozmowie z klientem: "Twoja reklama byla
+  -- widoczna u 49 osob w ciagu dwoch tygodni" znaczy dokladnie to, co mowi.
+  -- Poprzedni licznik dawal liczbe dziesieciokrotnie wyzsza, ktora przy
+  -- pierwszym pytaniu klienta okazalaby sie liczba RYSOWAN strony.
+  --
+  -- Zapisujemy id reklamy (zeby zmiana nazwy firmy nie rozbila historii)
+  -- oraz nazwe z chwili wyswietlenia (zeby raport dalo sie przeczytac po
+  -- usunieciu reklamy). Nadal nic o osobie: ani adresu, ani ciasteczka.
+  CREATE TABLE IF NOT EXISTS metryki_reklam (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reklama_id INTEGER,
+    nazwa TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_metryki_reklam_czas ON metryki_reklam(created_at DESC);
 `);
 
 const migrations = [
@@ -141,6 +161,19 @@ const migrations = [
   // stwierdzic, ze ZWiK usunal juz komunikat o awarii - czyli ze sprawa
   // jest zamknieta. Patrz widocznosc.js.
   'ALTER TABLE utrudnienia ADD COLUMN last_seen TEXT',
+  // Licznik odslon reklam liczyl do 24.11.2026 cos innego, niz nazywal:
+  // WSTAWIENIA pola reklamowego do strony. Appka rysuje liste od nowa przy
+  // kazdym przelaczeniu zakladki i przy kazdym wyszukiwaniu, a w kazdym
+  // rysowaniu wstawia pole co drugi wpis - wiec jedna osoba potrafila
+  // "wygenerowac" trzydziesci odslon, nie przewijajac ekranu. Liczyly sie
+  // tez pola PUSTE, bez zadnej reklamy w srodku, i takie, do ktorych
+  // mieszkaniec nigdy nie doscrollowal.
+  //
+  // Od wersji 2 liczymy inaczej: reklama musi naprawde pojawic sie na
+  // ekranie, i liczy sie raz na sesje na reklamodawce. Ta kolumna oddziela
+  // jedne dane od drugich, zeby panel nie zsumowal po cichu liczb, ktore
+  // znacza co innego - tej liczby wlasciciel appki uzywa wobec klientow.
+  'ALTER TABLE metryki_sesji ADD COLUMN wersja_licznika INTEGER NOT NULL DEFAULT 1',
   'ALTER TABLE daily_fact ADD COLUMN source_url TEXT',
 ];
 for (const sql of migrations) {
@@ -704,20 +737,66 @@ function doZakresu(wartosc, max) {
  * Sesje krotsze niz dwie sekundy pomijamy - to zwykle przeladowanie strony
  * albo bot, a nie wizyta mieszkanca.
  */
+// Wersja 2 = odslony liczone dopiero wtedy, gdy reklama naprawde pojawi sie
+// na ekranie, raz na sesje na reklamodawce. Patrz komentarz przy migracji.
+const WERSJA_LICZNIKA = 2;
+const MAX_REKLAM_NA_SESJE = 20;
+const MAX_DL_NAZWY_REKLAMY = 80;
+
+/**
+ * Reklamy zobaczone w jednej sesji, oczyszczone i bez powtorek.
+ *
+ * Czysta funkcja, bez bazy - zeby dalo sie ja sprawdzic testem, ktory NIE
+ * zapisuje niczego. To nie jest kosmetyka: test metryk uruchamia sie przy
+ * kazdym starcie serwera, a modul bazy jest wtedy juz polaczony z PRAWDZIWA
+ * baza. Test siegajacy do zapisu dopisywalby sztuczne sesje do produkcyjnych
+ * metryk przy kazdym wdrozeniu - czyli falszowalby dokladnie te liczby,
+ * ktore maja byc wiarygodne wobec reklamodawcow.
+ *
+ * Appka przysyla kazda reklame najwyzej raz, ale nie ufamy temu na slowo:
+ * trasa /api/metryki jest otwarta (musi byc, bo wysylka idzie przy
+ * zamykaniu karty), wiec przyjac moze cokolwiek.
+ */
+function przygotujReklamy(surowe) {
+  const lista = Array.isArray(surowe) ? surowe : [];
+  const widziane = [];
+  const juz = new Set();
+
+  for (const r of lista.slice(0, MAX_REKLAM_NA_SESJE)) {
+    const nazwa = String((r && r.nazwa) || '').replace(/\s+/g, ' ').trim()
+      .slice(0, MAX_DL_NAZWY_REKLAMY);
+    if (!nazwa) continue;
+    const idReklamy = Number.isFinite(Number(r.id)) ? Math.trunc(Number(r.id)) : null;
+    const klucz = idReklamy === null ? `n:${nazwa.toLowerCase()}` : `i:${idReklamy}`;
+    if (juz.has(klucz)) continue;
+    juz.add(klucz);
+    widziane.push({ id: idReklamy, nazwa });
+  }
+
+  return widziane;
+}
+
 function zapiszSesje(dane = {}) {
   const czas = doZakresu(dane.czas_s, MAX_CZAS_SESJI_S);
   if (czas < MIN_CZAS_SESJI_S) return false;
 
+  const widziane = przygotujReklamy(dane.reklamy);
+
   db.prepare(`
-    INSERT INTO metryki_sesji (czas_s, wyszukiwan, pustych, odslon_reklam, przelaczen)
-    VALUES (@czas_s, @wyszukiwan, @pustych, @odslon_reklam, @przelaczen)
+    INSERT INTO metryki_sesji (czas_s, wyszukiwan, pustych, odslon_reklam, przelaczen, wersja_licznika)
+    VALUES (@czas_s, @wyszukiwan, @pustych, @odslon_reklam, @przelaczen, @wersja)
   `).run({
     czas_s: czas,
     wyszukiwan: doZakresu(dane.wyszukiwan, MAX_LICZNIK),
     pustych: doZakresu(dane.pustych, MAX_LICZNIK),
-    odslon_reklam: doZakresu(dane.odslon_reklam, MAX_LICZNIK),
+    // Liczba REKLAMODAWCOW zobaczonych w tej sesji, a nie wstawien pola.
+    odslon_reklam: widziane.length,
     przelaczen: doZakresu(dane.przelaczen, MAX_LICZNIK),
+    wersja: WERSJA_LICZNIKA,
   });
+
+  const wstawReklame = db.prepare('INSERT INTO metryki_reklam (reklama_id, nazwa) VALUES (?, ?)');
+  for (const r of widziane) wstawReklame.run(r.id, r.nazwa);
 
   const frazy = Array.isArray(dane.puste_frazy) ? dane.puste_frazy : [];
   const wstaw = db.prepare('INSERT INTO metryki_pytania (fraza) VALUES (?)');
@@ -736,13 +815,20 @@ function zapiszSesje(dane = {}) {
 function getMetryki(days = 14) {
   const od = new Date(Date.now() - days * 86400000).toISOString();
 
+  // WSZYSTKO liczymy wylacznie z sesji w wersji 2 licznika. Sesje starsze
+  // mialy odslony liczone zupelnie inaczej (wstawienia pola zamiast
+  // obejrzen), wiec zsumowanie jednych z drugimi dawaloby liczbe, ktorej
+  // nie da sie obronic przed klientem. Lepiej zaczac od zera i wiedziec,
+  // co sie liczy, niz miec duza liczbe nieznanego pochodzenia.
+  const wersja = `wersja_licznika >= ${WERSJA_LICZNIKA}`;
+
   const grupa = (warunek) => db.prepare(`
     SELECT COUNT(*) AS sesji,
            COALESCE(AVG(czas_s), 0) AS sredniCzas,
            COALESCE(AVG(odslon_reklam), 0) AS srednieOdslony,
            COALESCE(SUM(odslon_reklam), 0) AS odslonyRazem,
            COALESCE(AVG(przelaczen), 0) AS sredniePrzelaczenia
-    FROM metryki_sesji WHERE created_at >= ? AND ${warunek}
+    FROM metryki_sesji WHERE created_at >= ? AND ${wersja} AND ${warunek}
   `).get(od);
 
   const zWyszukiwaniem = grupa('wyszukiwan > 0');
@@ -753,10 +839,30 @@ function getMetryki(days = 14) {
            COALESCE(SUM(wyszukiwan), 0) AS wyszukiwanRazem,
            COALESCE(SUM(pustych), 0) AS pustychRazem,
            COALESCE(SUM(odslon_reklam), 0) AS odslonyRazem
-    FROM metryki_sesji WHERE created_at >= ?
+    FROM metryki_sesji WHERE created_at >= ? AND ${wersja}
   `).get(od);
 
-  const pierwsza = db.prepare('SELECT created_at FROM metryki_sesji ORDER BY id ASC LIMIT 1').get();
+  // Sedno dla reklamodawcy: ile OSOB mialo te reklame na ekranie.
+  const reklamy = db.prepare(`
+    SELECT COALESCE(reklama_id, -1) AS id,
+           nazwa,
+           COUNT(*) AS osob,
+           MIN(created_at) AS odKiedy
+    FROM metryki_reklam
+    WHERE created_at >= ?
+    GROUP BY COALESCE(reklama_id, LOWER(nazwa))
+    ORDER BY osob DESC, nazwa ASC
+  `).all(od);
+
+  // Ile sesji sprzed zmiany licznika pomijamy - zeby panel mogl to napisac
+  // wprost, zamiast po cichu pokazywac mniejsze liczby niz wczoraj.
+  const stare = db.prepare(
+    `SELECT COUNT(*) AS sesji FROM metryki_sesji WHERE created_at >= ? AND wersja_licznika < ${WERSJA_LICZNIKA}`,
+  ).get(od);
+
+  const pierwsza = db.prepare(
+    `SELECT created_at FROM metryki_sesji WHERE ${wersja} ORDER BY id ASC LIMIT 1`,
+  ).get();
 
   const pustePytania = db.prepare(`
     SELECT fraza, COUNT(*) AS ile FROM metryki_pytania
@@ -770,6 +876,8 @@ function getMetryki(days = 14) {
     zWyszukiwaniem,
     bezWyszukiwania,
     pustePytania,
+    reklamy,
+    pominietychStarych: stare ? stare.sesji : 0,
   };
 }
 
@@ -779,7 +887,8 @@ function przytnijMetryki() {
   const granica = new Date(Date.now() - DNI_PRZECHOWYWANIA_METRYK * 86400000).toISOString();
   const a = db.prepare('DELETE FROM metryki_sesji WHERE created_at < ?').run(granica);
   const b = db.prepare('DELETE FROM metryki_pytania WHERE created_at < ?').run(granica);
-  const razem = a.changes + b.changes;
+  const c = db.prepare('DELETE FROM metryki_reklam WHERE created_at < ?').run(granica);
+  const razem = a.changes + b.changes + c.changes;
   if (razem) console.log(`[db] usunieto ${razem} metryk starszych niz ${DNI_PRZECHOWYWANIA_METRYK} dni`);
   return razem;
 }
@@ -1008,6 +1117,10 @@ module.exports = {
   getDescriptionsByUrls,
   policzWKategoriach,
   zapiszSesje,
+  przygotujReklamy,
+  MAX_REKLAM_NA_SESJE,
+  MAX_DL_NAZWY_REKLAMY,
+  WERSJA_LICZNIKA,
   getMetryki,
   przytnijMetryki,
   dezaktywujDuplikatyTresci,

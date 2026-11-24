@@ -148,6 +148,7 @@ const TESTY_TRESCI = [
   ['odsiewanie duplikatow', './testDuplikaty'],
   ['wodociagi w gminach', './testGminy'],
   ['wygasanie wpisow', './testWidocznosc'],
+  ['liczniki i odslony reklam', './testMetryki'],
   ['dociaganie ogniwa certyfikatu', './testCertyfikaty'],
   ['komunikaty ze stron gmin', './testGminyCms'],
   ['wyszukiwanie ulic', './testSzukania'],
