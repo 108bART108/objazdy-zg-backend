@@ -155,6 +155,12 @@ function przytnijMiejsce(nazwa) {
     // przeszedl przez kropke do nastepnego zdania. Ucinamy na granicy zdania,
     // ale z pominieciem skrotow w rodzaju "ul." i "al.".
     .replace(KONIEC_ZDANIA_RE, '')
+    // Nazwa ulicy nie ciagnie sie przez "w Plotach" - tam zaczyna sie juz
+    // miejscowosc. Bez tego z "ul. Szkolnej w Plotach w miejscowosci Ploty"
+    // robil sie naglowek, w ktorym wies stala dwa razy.
+    .replace(/\s+w\s+[A-ZĄĆĘŁŃÓŚŹŻ].*$/u, '')
+    // "ul. Letniej oraz okolice" - to juz wyliczanie, nie nazwa ulicy.
+    .replace(/\s+oraz\s+.*$/i, '')
     .replace(/\s+w\s+(godzinach|godzinie|godz|dniu|dniach|okresie).*$/i, '')
     .replace(/\s+(od|do)\s+.*$/i, '')
     .replace(/[\s,;:.–—-]+$/, '')
@@ -234,13 +240,39 @@ function wyciagOpis(item) {
   return tresc.replace(/\s+/g, ' ').trim().slice(0, LIMIT_ZRODLA);
 }
 
+/**
+ * Miejsce pokazywane w naglowku karty.
+ *
+ * KOLEJNOSC MA ZNACZENIE i pierwsza wersja miala ja odwrotnie. Przy
+ * komunikacie POMAK-u o Plotach - "nastapi przerwa w dostawie wody
+ * w miejscowosci Ploty przy ul. Letniej w godzinach od 9:00" - nazwa ulicy
+ * byla znajdowana pierwsza i w appce stalo "ul. Letniej". Sam dopelniacz,
+ * bez wsi: mieszkaniec Plotow nie poznawal wlasnej miejscowosci, a ktos
+ * z Zielonej Gory nie mial pojecia, gdzie to jest. Tymczasem w zakladce
+ * "woda" obok siebie leza komunikaty z miasta i z calego powiatu, wiec
+ * pierwsze pytanie czytelnika brzmi "czy to u mnie", a nie "ktora ulica".
+ *
+ * Dlatego wies ma pierwszenstwo, a ulica ja uzupelnia, gdy obie sie
+ * zmieszcza: "Ploty, ul. Letniej". Przerwa dotyczy zwykle jednej ulicy,
+ * wiec sama nazwa wsi obiecywalaby wiecej, niz napisal urzad.
+ */
 function wykryjMiejsce(tytul, opis) {
-  const zTytulu = przytnijMiejsce(extractStreet(tytul));
-  if (zTytulu) return zTytulu;
-  const zOpisu = przytnijMiejsce(extractStreet(opis));
-  if (zOpisu) return zOpisu;
-  const m = `${tytul} ${opis}`.match(MIEJSCOWOSC_RE);
-  return m ? m[1] : null;
+  const dopasowanie = `${tytul} ${opis}`.match(MIEJSCOWOSC_RE);
+  const wies = dopasowanie ? dopasowanie[1] : null;
+
+  const ulica = przytnijMiejsce(extractStreet(tytul))
+    || przytnijMiejsce(extractStreet(opis));
+
+  if (!wies) return ulica;
+  if (!ulica) return wies;
+
+  // extractStreet potrafi zagarnac takze nazwe wsi ("ul. Szkolnej
+  // w Plotach") - bez tego wies staneloby w naglowku dwa razy.
+  const ulicaBezWsi = ulica.replace(/\s+w\s+[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+$/, '').trim();
+  if (!ulicaBezWsi) return wies;
+
+  const razem = `${wies}, ${ulicaBezWsi}`;
+  return razem.length <= MAX_DL_MIEJSCA ? razem : wies;
 }
 
 /**

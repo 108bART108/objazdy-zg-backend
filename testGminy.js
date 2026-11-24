@@ -146,7 +146,14 @@ const WPISY_SZUM = [
 ];
 
 const bledy = [];
+// Licznik musi liczyc NAPRAWDE. Do 23.11.2026 stala tu recznie wpisana
+// liczba 77, ktora po dopisaniu warunkow przestawala sie zgadzac - log
+// chwalil sie 77 przypadkami niezaleznie od tego, ile ich jest. Taka liczba
+// nie tylko myli, ale pozwala po cichu usunac test bez sladu w logu.
+let sprawdzonych = 0;
+
 function sprawdz(warunek, opis) {
+  sprawdzonych += 1;
   if (!warunek) bledy.push(opis);
 }
 
@@ -283,6 +290,41 @@ sprawdz(opisPloty.length > 400, `wyciagOpis: opis ma tylko ${opisPloty.length} z
 sprawdz(wykryjMiejsce('Przerwa w dostawie wody', 'nastąpi przerwa w miejscowości Nietków') === 'Nietków',
   `miejsce: z "w miejscowosci Nietkow" wyszlo "${wykryjMiejsce('Przerwa w dostawie wody', 'nastąpi przerwa w miejscowości Nietków')}"`);
 
+// Blad widoczny w appce 23.11.2026: w naglowku karty stalo samo "ul. Letniej"
+// - dopelniacz bez wsi. Mieszkaniec Plotow nie poznawal wlasnej miejscowosci.
+// Wies ma pierwszenstwo, ulica ja uzupelnia.
+{
+  const zPlotow = wykryjMiejsce(
+    'Przerwa w dostawie wody - Płoty',
+    'Informujemy, że nastąpi przerwa w dostawie wody w miejscowości Płoty '
+    + 'przy ul. Letniej w godzinach od 9:00 do 13:00.',
+  );
+  sprawdz(zPlotow === 'Płoty, ul. Letniej',
+    `miejsce: wies przed ulica - wyszlo "${zPlotow}"`);
+  sprawdz(zPlotow.startsWith('Płoty'),
+    'miejsce: naglowek musi zaczynac sie od nazwy miejscowosci');
+}
+
+// extractStreet potrafi zagarnac takze nazwe wsi - wtedy nie wolno jej
+// postawic w naglowku dwa razy.
+{
+  const bezPowtorki = wykryjMiejsce(
+    'Przerwa w dostawie wody',
+    'Przerwa obejmie ul. Szkolnej w Płotach w miejscowości Płoty.',
+  );
+  sprawdz(!/Płot\w*.*Płot/i.test(bezPowtorki),
+    `miejsce: nazwa wsi powtorzona w naglowku - "${bezPowtorki}"`);
+  sprawdz(bezPowtorki === 'Płoty, ul. Szkolnej',
+    `miejsce: nazwa ulicy nie zostala ucieta na granicy wsi - "${bezPowtorki}"`);
+}
+
+// Gdy wsi nie ma, ulica zostaje jedynym wskazaniem - tak jak dotad.
+sprawdz(wykryjMiejsce('Awaria', 'Brak wody na ul. Letniej.') === 'ul. Letniej',
+  `miejsce: bez wsi zostaje sama ulica - wyszlo "${wykryjMiejsce('Awaria', 'Brak wody na ul. Letniej.')}"`);
+
+sprawdz(wykryjMiejsce('Komunikat', 'Przerwa w dostawie wody.') === null,
+  'miejsce: brak wskazowki daje brak miejsca, a nie zmyslone');
+
 // ===================== 9. ROZPOZNAWANIE ODWOLANIA ===========================
 for (const tekst of [
   'Informujemy, że dostawa wody została przywrócona.',
@@ -333,8 +375,20 @@ sprawdz(przytnijMiejsce('ul. Kościuszki w godzinach od 8') === 'ul. Kościuszki
   `przycinanie: "${przytnijMiejsce('ul. Kościuszki w godzinach od 8')}"`);
 sprawdz(przytnijMiejsce('Nietków') === 'Nietków', 'przycinanie: zwykla nazwa ma zostac bez zmian');
 // Z proby na zywo: extractStreet przeszedl przez kropke do nastepnego zdania.
-sprawdz(przytnijMiejsce('ul. Szkolnej w Płotach. Przerwa spo') === 'ul. Szkolnej w Płotach',
-  `przycinanie: "${przytnijMiejsce('ul. Szkolnej w Płotach. Przerwa spo')}" - ucinamy na granicy zdania`);
+//
+// UWAGA, oczekiwanie zmienilo sie 23.11.2026 i nie jest to oslabienie testu.
+// Wczesniej wychodzilo stad "ul. Szkolnej w Plotach" - caly ogon z nazwa wsi.
+// Dzis nazwe wsi wyciaga osobny wzorzec i stawia ja NA POCZATKU naglowka
+// ("Ploty, ul. Szkolnej"), wiec ulica ma sie konczyc tam, gdzie zaczyna sie
+// miejscowosc. Pilnowana wlasciwosc jest ta sama: zadnego przeciekania do
+// nastepnego zdania.
+{
+  const przyciete = przytnijMiejsce('ul. Szkolnej w Płotach. Przerwa spo');
+  sprawdz(przyciete === 'ul. Szkolnej',
+    `przycinanie: "${przyciete}" - ulica konczy sie przed nazwa wsi`);
+  sprawdz(!/Przerwa/i.test(przyciete),
+    `przycinanie: "${przyciete}" - tresc nastepnego zdania przeciekla do nazwy miejsca`);
+}
 // ...ale kropka w skrocie "ul." zdania NIE konczy.
 sprawdz(przytnijMiejsce('ul. Szkolna') === 'ul. Szkolna',
   `przycinanie: "${przytnijMiejsce('ul. Szkolna')}" - kropka po "ul" to skrot, nie koniec zdania`);
@@ -366,10 +420,8 @@ sprawdz(zbudujTytul('Nowogród Bobrzański', 'Awaria w Nowogrodzie Bobrzanskim',
   .startsWith('Nowogród Bobrzański: '),
 'zbudujTytul: odmieniona nazwa gminy to nie to samo slowo - prefiks ma zostac dopisany');
 
-const LICZBA_WARUNKOW = 77;
-
 function uruchomTesty() {
-  return { sprawdzonych: LICZBA_WARUNKOW, bledy };
+  return { sprawdzonych, bledy };
 }
 
 if (require.main === module) {
@@ -388,7 +440,7 @@ if (require.main === module) {
   console.log(`szum: ${szum.wyniki.length} przeszlo (powinno 0), ${szum.pominietych} pominietych`);
   console.log('');
   for (const b of bledy) console.log(`BLAD ${b}`);
-  console.log(`Sprawdzono ${LICZBA_WARUNKOW} warunkow, bledow: ${bledy.length}`);
+  console.log(`Sprawdzono ${sprawdzonych} warunkow, bledow: ${bledy.length}`);
   process.exit(bledy.length ? 1 : 0);
 }
 
