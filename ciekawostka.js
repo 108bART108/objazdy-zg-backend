@@ -20,7 +20,49 @@ function todayDate() {
 
 let activeModel = MODEL;
 
-async function callClaude(prompt, useSearch) {
+// POMIAR ZUZYCIA API.
+//
+// Ciekawostka jest jedyna czescia appki, ktora placi za siebie z konta API -
+// osobnego od abonamentu, z wlasna karta. Dotad nie bylo z czego odczytac,
+// ile dziennie kosztuje: kod nie zapisywal ani tokenow, ani liczby platnych
+// wyszukiwan. Bez tego kazda "oszczednosc" bylaby zgadywaniem.
+//
+// Liczymy to, co naprawde widnieje na rachunku: tokeny wejscia i wyjscia
+// osobno (maja rozne stawki) oraz liczbe zapytan do wyszukiwarki, ktore sa
+// platne za sztuke. Nie przeliczamy tego na zlotowki - stawki zmieniaja sie
+// niezaleznie od nas, a dokladne kwoty i tak sa w Console.
+let pomiar = null;
+
+function zacznijPomiar() {
+  pomiar = { wywolan: 0, wejscie: 0, wyjscie: 0, wyszukiwan: 0, kroki: [] };
+}
+
+function zapiszZuzycie(etykieta, model, usage) {
+  if (!pomiar || !usage) return;
+  const wejscie = (usage.input_tokens || 0)
+    + (usage.cache_read_input_tokens || 0)
+    + (usage.cache_creation_input_tokens || 0);
+  const wyjscie = usage.output_tokens || 0;
+  const szukan = (usage.server_tool_use && usage.server_tool_use.web_search_requests) || 0;
+
+  pomiar.wywolan += 1;
+  pomiar.wejscie += wejscie;
+  pomiar.wyjscie += wyjscie;
+  pomiar.wyszukiwan += szukan;
+  pomiar.kroki.push(`${etykieta}(${model.replace('claude-', '')}): ${wejscie}+${wyjscie} tok`
+    + `${szukan ? `, ${szukan} szukan` : ''}`);
+}
+
+function podsumujPomiar() {
+  if (!pomiar) return;
+  console.log(`[ciekawostka] ZUZYCIE API: ${pomiar.wywolan} wywolan, `
+    + `${pomiar.wejscie} tokenow wejscia, ${pomiar.wyjscie} wyjscia, `
+    + `${pomiar.wyszukiwan} platnych wyszukan`);
+  console.log(`[ciekawostka] kroki: ${pomiar.kroki.join(' | ')}`);
+  pomiar = null;
+}
+
+async function callClaude(prompt, useSearch, etykieta = 'krok') {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('Brak ANTHROPIC_API_KEY w zmiennych srodowiskowych');
 
@@ -64,6 +106,7 @@ async function callClaude(prompt, useSearch) {
   }
 
   const data = await res.json();
+  zapiszZuzycie(etykieta, activeModel, data.usage);
   const text = (data.content || [])
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
@@ -96,7 +139,7 @@ ${avoidText}Wazne zasady:
 - Pisz wylacznie o faktach, ktore znalazles i zweryfikowales w wyszukanych zrodlach. Jesli nie jestes pewien dokladnej daty, liczby czy nazwiska, sformuluj zdanie ostrozniej (np. "prawdopodobnie", "w XIX wieku", "kilkaset") zamiast podawac falszywie precyzyjne dane.
 - Nie wymyslaj faktow, ktorych nie potwierdzily wyniki wyszukiwania - lepiej podac bardziej ogolna, ale prawdziwa informacje.`;
 
-  const text = await callClaude(prompt, true);
+  const text = await callClaude(prompt, true, 'generowanie');
   return text.slice(0, 500);
 }
 
@@ -126,7 +169,7 @@ Tylko zawartosc miedzy znacznikami <ciekawostka> i </ciekawostka> zostanie opubl
 
 Jesli oryginalny tekst byl juz poprawny i wiarygodny - wstaw go w znacznikach bez zmian. Jesli mial bledy jezykowe - popraw je w wersji w znacznikach. Jesli laczyl dwa tematy - w znacznikach zostaw tylko pierwszy. Jesli fakt byl niepewny - w znacznikach umiesc ostrozniejsze sformulowanie lub inny, pewny fakt.`;
 
-  const text = await callClaude(prompt, true);
+  const text = await callClaude(prompt, true, 'weryfikacja');
   const match = text.match(/<ciekawostka>([\s\S]*?)<\/ciekawostka>/i);
   if (!match) {
     console.warn('[ciekawostka] recenzent nie uzyl wymaganych znacznikow - odrzucam odpowiedz');
@@ -183,7 +226,7 @@ FORMAT ODPOWIEDZI - obowiazkowy. Na samym koncu umiesc poprawiony tekst dokladni
 (tutaj poprawiony tekst, bez cudzyslowow i bez komentarzy)
 </poprawiona>`;
 
-  const out = await callClaude(prompt, false);
+  const out = await callClaude(prompt, false, 'korekta');
   const match = out.match(/<poprawiona>([\s\S]*?)<\/poprawiona>/i);
   if (!match) {
     console.warn('[ciekawostka] naprawa nie uzyla znacznikow - pomijam');
@@ -220,7 +263,7 @@ FORMAT ODPOWIEDZI - obowiazkowy. Na samym koncu odpowiedzi umiesc poprawiony tek
 
 Jesli tekst nie zawiera zadnych bledow - wstaw go w znacznikach bez zmian.`;
 
-  const out = await callClaude(prompt, false);
+  const out = await callClaude(prompt, false, 'naprawa');
   const match = out.match(/<poprawiona>([\s\S]*?)<\/poprawiona>/i);
   if (!match) {
     console.warn('[ciekawostka] korektor nie uzyl znacznikow - pomijam krok korekty');
@@ -322,6 +365,17 @@ const MAX_ATTEMPTS = 3;
 // recenzent odpadl na jednym z filtrow, a kod opublikowal nieprzejrzana
 // wersje robocza.
 async function generateFactViaClaude(avoidList) {
+  zacznijPomiar();
+  try {
+    return await probujWygenerowac(avoidList);
+  } finally {
+    // Takze gdy wszystkie proby odpadly - nieudany dzien tez kosztuje,
+    // a wlasnie takie dni sa najdrozsze (kazda proba to pelny cykl).
+    podsumujPomiar();
+  }
+}
+
+async function probujWygenerowac(avoidList) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
       const draft = await generateFact(avoidList);
