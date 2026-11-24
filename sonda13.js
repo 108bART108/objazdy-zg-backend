@@ -59,8 +59,12 @@ const wiersze = db.prepare(
   'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0 ORDER BY category, published_at DESC',
 ).all();
 
+// UWAGA na nazwe: to sa wszystkie AKTYWNE wpisy w bazie, a nie to, co widzi
+// mieszkaniec. Appka pokazuje najwyzej 50 najnowszych w kazdej zakladce,
+// wiec wiekszosc tych wpisow i tak nigdy nie trafila na ekran.
 console.log('');
-console.log(`=== WPISY WIDOCZNE DZIS W APPCE: ${wiersze.length} ===`);
+console.log(`=== AKTYWNE WPISY W BAZIE: ${wiersze.length} ===`);
+console.log('(appka pokazuje najwyzej 50 najnowszych na zakladke - to NIE jest to, co widzi mieszkaniec)');
 
 const wgKategorii = {};
 const znikna = [];
@@ -76,23 +80,43 @@ for (const w of wiersze) {
   }
 }
 
-Object.entries(wgKategorii).forEach(([kat, s]) => {
-  const zostaje = s.razem - s.znika;
-  console.log(`  ${kat.padEnd(10)} ${String(s.razem).padStart(3)} wpisow  →  zostaje ${String(zostaje).padStart(3)}, znika ${s.znika}`);
-});
+function wypiszPodsumowanie() {
+  Object.entries(wgKategorii).forEach(([kat, s]) => {
+    const zostaje = s.razem - s.znika;
+    console.log(`  ${kat.padEnd(10)} ${String(s.razem).padStart(4)} w bazie  →  ZOSTAJE ${String(zostaje).padStart(4)}, znika ${s.znika}`);
+  });
+  console.log(`  ${'RAZEM'.padEnd(10)} ${String(wiersze.length).padStart(4)} w bazie  →  ZOSTAJE `
+    + `${String(wiersze.length - znikna.length).padStart(4)}, znika ${znikna.length}`);
+}
+
+wypiszPodsumowanie();
+
+// Szczegoly ograniczamy do kilkunastu na kategorie. Pierwsza wersja wypisywala
+// wszystko i wynik mial kilkaset linii - najwazniejsza tabelka ladowala na
+// gorze, poza zasiegiem przewijania terminala. Powtarzamy ja tez na koncu.
+const MAX_SZCZEGOLOW_NA_KATEGORIE = 12;
 
 console.log('');
 console.log(`=== ZNIKNIE: ${znikna.length} z ${wiersze.length} ===`);
 if (!znikna.length) {
   console.log('  Nic. Zadnego wpisu nie trzeba dzis chowac.');
 } else {
+  const pokazane = {};
   for (const { w, powod } of znikna) {
+    pokazane[w.category] = (pokazane[w.category] || 0) + 1;
+    if (pokazane[w.category] > MAX_SZCZEGOLOW_NA_KATEGORIE) continue;
     console.log('');
     console.log(`  [${w.category}] ${skroc(w.title, DL_TYTULU)}`);
     console.log(`      zrodlo:     ${w.source_name}`);
     console.log(`      publikacja: ${dzien(w.published_at)} | zdarzenie: ${dzien(w.event_date)}`);
     console.log(`      POWOD:      ${powod}`);
   }
+  Object.entries(pokazane).forEach(([kat, ile]) => {
+    if (ile > MAX_SZCZEGOLOW_NA_KATEGORIE) {
+      console.log('');
+      console.log(`  … i jeszcze ${ile - MAX_SZCZEGOLOW_NA_KATEGORIE} wpisow w kategorii "${kat}"`);
+    }
+  });
 }
 
 // Najstarsze wpisy, ktore MIMO WSZYSTKO zostaja - tu widac, czy progi nie
@@ -112,5 +136,13 @@ najstarsze.slice(0, ILE_NAJSTARSZYCH).forEach((w) => {
 });
 
 db.close();
+
+// Ta sama tabelka jeszcze raz, na samym koncu - to jest liczba, na ktorej
+// podejmujemy decyzje, a na gorze wydruku bywa poza zasiegiem przewijania.
+console.log('');
+console.log('==========================================================');
+console.log('PODSUMOWANIE — to jest liczba, ktora rozstrzyga');
+console.log('==========================================================');
+wypiszPodsumowanie();
 console.log('');
 console.log('KONIEC. Sonda nic nie zapisala i nic nie zmienila.');
