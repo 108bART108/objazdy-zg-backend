@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const { szukaj, normalizujKategorie, policzKategorie } = require('./szukanie');
+const { podzielWpisy } = require('./widocznosc');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'objazdy.db');
 
@@ -134,10 +135,38 @@ const migrations = [
   'ALTER TABLE utrudnienia ADD COLUMN event_date TEXT',
   'ALTER TABLE utrudnienia ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE utrudnienia ADD COLUMN review_reasons TEXT',
+  // Kiedy OSTATNI raz widzielismy ten wpis u zrodla. Istniejace fetched_at
+  // sie do tego nie nadaje: ustawia sie tylko przy wstawianiu i nigdy nie
+  // odswieza, wiec znaczy "pierwszy raz widziany". Bez last_seen nie da sie
+  // stwierdzic, ze ZWiK usunal juz komunikat o awarii - czyli ze sprawa
+  // jest zamknieta. Patrz widocznosc.js.
+  'ALTER TABLE utrudnienia ADD COLUMN last_seen TEXT',
   'ALTER TABLE daily_fact ADD COLUMN source_url TEXT',
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (err) { /* kolumna juz istnieje */ }
+}
+
+// Wpisy, ktore byly w bazie przed wprowadzeniem last_seen, dostaja znacznik
+// "widziany teraz" - a NIE swoje fetched_at, choc kusi.
+//
+// Powod jest praktyczny. Przy zimnym starcie gminyCms pobiera tylko trzy
+// podstrony na gmine, wiec czesc wpisow Swidnicy i Otynia nie odswiezy sie
+// w pierwszym cyklu. Gdybysmy wpisali im stare fetched_at, regula
+// nieobecnosci zdjelaby je od razu po wdrozeniu i wrocilyby dopiero po
+// kilkudziesieciu minutach - mignieciem, ktorego nikt by nie zrozumial.
+//
+// Kosztuje to jedna dobe zwloki, zanim naprawde porzucone wpisy zaczna
+// znikac. Lepsze niz znikanie wpisow, ktore sa w porzadku.
+try {
+  const uzupelnione = db.prepare(
+    "UPDATE utrudnienia SET last_seen = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE last_seen IS NULL",
+  ).run();
+  if (uzupelnione.changes) {
+    console.log(`[db] uzupelniono last_seen dla ${uzupelnione.changes} wpisow sprzed tej zmiany`);
+  }
+} catch (err) {
+  console.error('[db] nie udalo sie uzupelnic last_seen:', err.message);
 }
 
 // Jednorazowe naprawienie juz istniejacych wpisow, ktore zdazyly zapisac
@@ -328,8 +357,8 @@ try {
 //    appka nie zacznie znowu pokazywac wszystkim wpisom dzisiejszej daty -
 //    po prostu zachowa ostatnia znana, dobra wartosc.
 const upsertStmt = db.prepare(`
-  INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at, event_date, needs_review, review_reasons)
-  VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), @event_date, @needs_review, @review_reasons)
+  INSERT INTO utrudnienia (source_url, source_name, category, title, street, description, published_at, event_date, needs_review, review_reasons, last_seen)
+  VALUES (@source_url, @source_name, @category, @title, @street, @description, COALESCE(@published_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), @event_date, @needs_review, @review_reasons, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   ON CONFLICT(source_url) DO UPDATE SET
     -- Kategoria MUSI sie aktualizowac razem z reszta. Bez tej linii wpis raz
     -- zle zaszufladkowany zostawal w zlej zakladce na zawsze, nawet po
@@ -346,6 +375,9 @@ const upsertStmt = db.prepare(`
     event_date = COALESCE(@event_date, utrudnienia.event_date),
     needs_review = excluded.needs_review,
     review_reasons = excluded.review_reasons,
+    -- MUSI sie odswiezac przy kazdym zapisie - na tym opiera sie cala
+    -- regula "zrodlo juz tego nie wymienia, czyli sprawa zamknieta".
+    last_seen = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
     active = 1
 `);
 
@@ -428,7 +460,10 @@ function policzWKategoriach({ search } = {}) {
     'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0 '
     + 'ORDER BY published_at DESC LIMIT @limit',
   ).all({ limit: LIMIT_DO_SZUKANIA });
-  return policzKategorie(wiersze, search);
+  // Te same wpisy, ktore widzi lista - inaczej appka napisalaby "2 wyniki
+  // w wodociagach", a po przejsciu do zakladki pokazalaby jeden.
+  const { widoczne } = podzielWpisy(wiersze);
+  return policzKategorie(widoczne, search);
 }
 
 function listUtrudnienia({ category, search, limit = 50 } = {}) {
@@ -467,15 +502,25 @@ function listUtrudnienia({ category, search, limit = 50 } = {}) {
   // - stąd ta zmiana.)
   query += ' ORDER BY published_at DESC LIMIT @limit';
 
-  // Przy szukaniu bierzemy z bazy szerzej niz prosi appka, bo filtr dziala
-  // dopiero potem - inaczej szukalibysmy wylacznie wsrod pierwszych 50
-  // wpisow i starsza awaria na tej samej ulicy nigdy by sie nie pokazala.
-  params.limit = search ? Math.max(limit, LIMIT_DO_SZUKANIA) : limit;
+  // Z bazy bierzemy SZERZEJ, niz prosi appka, bo filtry dzialaja dopiero
+  // potem - i dotyczy to dwoch rzeczy naraz:
+  //  - szukania: inaczej szukalibysmy wylacznie wsrod pierwszych 50 wpisow
+  //    i starsza awaria na tej samej ulicy nigdy by sie nie pokazala;
+  //  - wygasania: gdyby z bazy wyszlo dokladnie 50 wpisow, a dziesiec z nich
+  //    okazalo sie nieaktualnych, appka dostalaby 40 i nie dolozylaby
+  //    brakujacych, choc leza w bazie.
+  // Aktywnych wpisow jest kilkadziesiat, wiec to i tak natychmiastowe.
+  params.limit = Math.max(limit, LIMIT_DO_SZUKANIA);
 
   const wiersze = db.prepare(query).all(params);
-  if (!search) return wiersze;
 
-  return szukaj(wiersze, search).slice(0, limit);
+  // Zakonczone zdarzenia znikaja z appki - patrz widocznosc.js. Nie sa
+  // kasowane ani oznaczane jako nieaktywne: to filtr przy odczycie, wiec
+  // w panelu admina widac caly stan faktyczny.
+  const { widoczne } = podzielWpisy(wiersze);
+
+  if (!search) return widoczne.slice(0, limit);
+  return szukaj(widoczne, search).slice(0, limit);
 }
 
 function getDailyFact(date) {
