@@ -31,6 +31,23 @@ const PRZYPADKI = [
   ['Wyłączenia prądu w Zielonej Górze', 'Enea Operator informuje o wyłączeniach prądu.', true, 'prad'],
   ['ul. Wodociągowa wyłączona z ruchu', 'Odcinek nieprzejezdny do piątku.', true, 'drogi'],
 
+  // --- remont BUDYNKU to nie utrudnienie w ruchu (24.11.2026) --------------
+  // Do zakladki "drogi" wszedl 400-slowny artykul o remoncie galerii BWA
+  // i dawnej szkoly muzycznej - przepuscil go goly wzorzec "remont",
+  // trafiajac w zdanie "Remont przejdzie rowniez sama galeria".
+  // Mieszkaniec szukajacy zamknietej ulicy dostawal opis sali projekcyjnej.
+  // Uwaga: w tresci pada tez slowo "drogi" ("nie tylko w drogi i sport"),
+  // wiec sama obecnosc slowa drogowego gdziekolwiek w tekscie NIE moze
+  // wystarczyc - musi stac blisko slowa o pracach.
+  ['BWA i dawna szkola muzyczna do modernizacji. Nowa przestrzen kultury',
+    'Nowa sala projekcyjna, winda i zagospodarowany ogrod - tak zmieni sie zabytkowa willa przy BWA. '
+    + 'Remont przejdzie rowniez sama galeria. Budynek przejdzie termomodernizacje, odnowiona zostanie '
+    + 'elewacja. Chcemy inwestowac nie tylko w drogi i sport, ale takze w kulture.', false, null],
+  ['Remont sali gimnastycznej w szkole podstawowej',
+    'Szkola zyska nowa sale gimnastyczna po remoncie. Wartosc inwestycji to 3 mln zl.', false, null],
+  ['Przebudowa placu zabaw przy przedszkolu',
+    'Dzieci zyskaja nowe urzadzenia na placu zabaw.', false, null],
+
   // --- komunikaty, przez ktore powstal kanal glowny (2.11.2026) -------------
   ['Rusza przebudowa zielonogorskiego deptaka', 'Prace potrwaja do wiosny.', true, 'drogi'],
   ['Zmiany w organizacji ruchu na Fabrycznej', 'Od poniedzialku obowiazuje nowa organizacja ruchu.', true, 'drogi'],

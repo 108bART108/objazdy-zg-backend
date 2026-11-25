@@ -38,12 +38,41 @@ const FEEDS = [
 // swiezym powietrzu" trafilby wtedy do appki o utrudnieniach. Dlatego
 // szukamy "organizacji ruchu", "sterowania ruchem" czy "ograniczen w
 // ruchu" - a nie samego rdzenia.
+// Rzeczowniki, ktore robia z "remontu" remont DROGI, a nie budynku.
+// "ul\\." jest tu osobno, bo urzad pisze "Remont ul. Warynskiego", a nie
+// "ulicy"; podobnie oznaczenia DW i DK.
+// "deptak" dopisany po tescie, ktory wylapal, ze "Rusza przebudowa
+// zielonogorskiego deptaka" przestalo wchodzic. Deptak to nie budynek -
+// jego przebudowa dotyczy pieszych i jest utrudnieniem. Tak samo tunel,
+// kladka czy bulwar: wszystko, czym ludzie sie PORUSZAJA.
+//
+// Swiadomie NIE ma tu slowa "plac": "przebudowa placu zabaw" to nie
+// utrudnienie w ruchu, a "plac budowy" jest juz osobnym wzorcem nizej.
+const RZECZOWNIK_DROGOWY = '(ul\\.|ulic|drog|alej|alei|chodnik|[śs]cie[żz]k'
+  + '|deptak|bulwar|promenad|tunel|k[łl]adk'
+  + '|most|wiaduk|rond|skrzy[żz]|nawierzchni|jezdni|parking|torowisk'
+  + '|obwodnic|przejazd|zjazd|w[ęe]z[łl]|DW\\s*\\d|DK\\s*\\d)';
+const PRACE_BUDOWLANE = '(remont|przebudow|modernizacj)';
+const ODLEGLOSC = '[\\s\\S]{0,40}';
+
 const WZORZEC_UTRUDNIENIA = new RegExp([
   // organizacja i ograniczenia ruchu
   'organizacj\\w* ruchu', 'sterowani\\w* ruchem', 'ograniczeni\\w* w ruchu',
   'ruch\\w* drogow', 'wy[łl][ąa]czon\\w* z ruchu', 'nieprzejezdn',
   // roboty i ich skutki
-  'przebudow', 'remont', 'modernizacj\\w* (ulic|drog|skrzy[żz]|most)',
+  // Remont, przebudowa i modernizacja licza sie TYLKO blisko slowa
+  // drogowego - w dowolnej kolejnosci ("remont ul. Lipowej", ale tez
+  // "drogi do remontu").
+  //
+  // Goly wzorzec "remont" wpuscil 24.11.2026 do zakladki "drogi" artykul
+  // "BWA i dawna szkola muzyczna do modernizacji" - 400 slow o remoncie
+  // galerii sztuki, bo padlo w nim zdanie "Remont przejdzie rowniez sama
+  // galeria". Mieszkaniec szukajacy zamknietej ulicy dostawal tekst
+  // o sali projekcyjnej i panelach fotowoltaicznych. "modernizacj" bylo
+  // juz wczesniej zawezone, ale "remont" i "przebudow" nie - poprawiamy
+  // wszystkie trzy tak samo.
+  `${PRACE_BUDOWLANE}\\w*${ODLEGLOSC}${RZECZOWNIK_DROGOWY}`,
+  `${RZECZOWNIK_DROGOWY}\\w*${ODLEGLOSC}${PRACE_BUDOWLANE}`,
   'roboty drogowe', 'prace drogowe', 'prace budowlane',
   'objazd', 'zamkni[ęe]ci\\w* (ulic|drog|przejazd|skrzy[żz]|parking)',
   'zw[ęe][żz]eni', 'utrudnieni',
@@ -183,8 +212,27 @@ async function fetchUmZgora() {
         // Kanal glowny zawiera cale zycie miasta: forum senioralne, koncerty,
         // swieta. Do appki o utrudnieniach wpuszczamy tylko to, co faktycznie
         // dotyczy ruchu, awarii lub przerw w dostawach.
-        if (feed.filtruj && !dotyczyUtrudnienia(item.title, poczatek)) {
+        // Kanaly tagowe tez filtrujemy, choc tag ustawia sam urzad.
+        //
+        // Dotad im ufalismy bez sprawdzania - skoro magistrat oznaczyl
+        // artykul tagiem "drogi w Zielonej Gorze", to pewnie dotyczy drog.
+        // 24.11.2026 okazalo sie, ze niekoniecznie: do zakladki "drogi"
+        // wszedl 400-slowny tekst o remoncie galerii BWA i dawnej szkoly
+        // muzycznej. Mieszkaniec szukajacy zamknietej ulicy dostawal opis
+        // sali projekcyjnej i paneli fotowoltaicznych.
+        //
+        // Roznica wzgledem kanalu glownego jest w LOGOWANIU, nie w progu.
+        // Z kanalu glownego odpadaja dziesiatki artykulow i wypisujemy
+        // tylko ich liczbe. Z kanalu tagowego odrzucenie powinno byc
+        // rzadkie, wiec wypisujemy TYTUL - zeby bledne odrzucenie dalo sie
+        // zauwazyc i poprawic, zamiast gubic komunikat po cichu. W tym
+        // projekcie cicha strata komunikatu jest grozniejsza niz nadmiar.
+        if (!dotyczyUtrudnienia(item.title, poczatek)) {
           pominietych++;
+          if (!feed.filtruj) {
+            console.warn(`[umZgora] ${feed.etykieta}: pomijam wpis niezwiazany z utrudnieniami `
+              + `- "${item.title}"`);
+          }
           continue;
         }
 
