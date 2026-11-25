@@ -33,7 +33,23 @@ const MONTH_NAMES_RE = Object.keys(MONTHS).join('|');
  * @returns {Date|null}
  */
 function extractPolishDate(text, now = new Date()) {
-  if (!text) return null;
+  const wszystkie = extractPolishDates(text, now);
+  return wszystkie.length ? wszystkie[0] : null;
+}
+
+/**
+ * WSZYSTKIE daty z tekstu, w kolejnosci wystepowania.
+ *
+ * Powstalo dla wygasania wpisow. Komunikat "od 24.11.2026 do 30.11.2026"
+ * ma event_date 24.11 - czyli date POCZATKU. Gdyby wygasanie patrzylo
+ * tylko na nia, schowaloby w pol tygodnia przerwe w dostawie wody, ktora
+ * wlasnie trwa. Zeby odrozniac zdarzenie zakonczone od trwajacego,
+ * trzeba znac date ostatnia, a nie pierwsza.
+ *
+ * extractPolishDate nadal zwraca pierwsza date i jego wynik sie nie zmienia.
+ */
+function extractPolishDates(text, now = new Date()) {
+  if (!text) return [];
 
   const candidates = [];
 
@@ -53,10 +69,18 @@ function extractPolishDate(text, now = new Date()) {
     candidates.push({ index: m.index, day, month, year: m[3] ? Number(m[3]) : null });
   }
 
-  if (!candidates.length) return null;
+  if (!candidates.length) return [];
   candidates.sort((a, b) => a.index - b.index);
-  const best = candidates[0];
 
+  const daty = [];
+  for (const kandydat of candidates) {
+    const d = naDate(kandydat, now);
+    if (d) daty.push(d);
+  }
+  return daty;
+}
+
+function naDate(best, now) {
   let year = best.year || now.getFullYear();
   let d = new Date(year, best.month, best.day);
   if (isNaN(d.getTime())) return null;
@@ -74,4 +98,4 @@ function extractPolishDate(text, now = new Date()) {
   return d;
 }
 
-module.exports = { extractPolishDate };
+module.exports = { extractPolishDate, extractPolishDates };

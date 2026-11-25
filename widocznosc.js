@@ -8,7 +8,7 @@
 // trzech lat, przestaje byc wiarygodna w calosci - bo skad ma wiedziec,
 // ktory wpis jest prawdziwy.
 //
-// DWIE REGULY, bo zadna sama nie wystarcza:
+// TRZY REGULY, bo zadna sama nie wystarcza:
 //
 // 1. NIEOBECNOSC U ZRODLA. Gdy ZWiK albo POMAK usuwa komunikat ze swojej
 //    strony, sprawa jest zamknieta - i to najpewniejszy sygnal, jaki mamy,
@@ -18,6 +18,19 @@
 // 2. SKRAJNY WIEK. Sama reguła nieobecnosci nie zdjelaby mostu z 2023 roku,
 //    bo PZZD trzyma go na liscie do dzis i widzimy go w kazdym cyklu.
 //    Dlatego po dostatecznie dlugim czasie chowamy wpis mimo wszystko.
+//
+// 3. ZDARZENIE JUZ MINELO. Dopisane 25.11.2026, bo dwie powyzsze reguly
+//    przepuscily przypadek, ktorego zadna nie obejmowala. ZUK wydal dwa
+//    komunikaty o Grabowcu: 23.11 o przerwie 24.11 i 24.11 o dokonczeniu
+//    prac 25.11. Oba wisialy obok siebie, prawie identyczne - wygladalo
+//    to na zdublowany wpis, a bylo czyms gorszym: wczorajsza przerwa
+//    udawala aktualna. Regula 1 jej nie zdjela, bo gmina trzyma oba
+//    komunikaty na stronie; regula 2 tez nie, bo wpis mial dwa dni przy
+//    progu siedmiu.
+//
+//    Tu nie liczymy dni, tylko porownujemy DZIEN KALENDARZOWY zdarzenia
+//    z dzisiejszym - w strefie Europe/Warsaw, bo serwer chodzi na UTC
+//    i miedzy polnoca a pierwsza w nocy "dzis" znaczyloby wczoraj.
 //
 // PROGI ZALEZA OD KATEGORII i nie jest to ozdobnik. Awaria wody trwa
 // godziny, wiec niewidziana od doby jest skonczona. Zamkniecie drogi trwa
@@ -34,7 +47,16 @@
 // przy ODCZYCIE. Zly prog cofa sie jednym wdrozeniem, a w panelu admina
 // widac caly stan faktyczny.
 
+const { extractPolishDates } = require('./polishDates');
+
 const DZIEN_MS = 24 * 3600 * 1000;
+
+// Kategorie, w ktorych zdarzenie zamyka sie tego samego dnia, wiec nazajutrz
+// na pewno jest po wszystkim. Drog tu NIE MA i nie moze byc: zamkniecie
+// ulicy zaczyna sie w podanym dniu i trwa miesiacami, a ta regula zdjelaby
+// je nazajutrz po rozpoczeciu - czyli dokladnie wtedy, gdy jest najbardziej
+// potrzebne. MZK tak samo (zmiana trasy obowiazuje od dnia X "do odwolania").
+const ZDARZENIE_KONCZY_SIE_TEGO_DNIA = new Set(['wodociagi', 'prad']);
 
 const WIDOCZNOSC = {
   // niewidziany u zrodla dluzej niz -> ukryj | starszy niz -> ukryj mimo wszystko
@@ -72,6 +94,63 @@ function datolicznik(wpis) {
 }
 
 /**
+ * Dzien kalendarzowy w Zielonej Gorze, jako "RRRR-MM-DD".
+ *
+ * Render chodzi na UTC. Gdybysmy pytali serwer o "dzisiaj", to miedzy
+ * polnoca a pierwsza w nocy czasu polskiego (i miedzy polnoca a druga
+ * latem) odpowiadalby wczorajsza data - i wpis o dzisiejszej przerwie
+ * w dostawie wody znikalby mieszkancowi sprzed nosa akurat w nocy.
+ * Format "sv-SE" daje gotowe RRRR-MM-DD, ktore porownuje sie zwyklym <.
+ */
+function dzienWarszawski(ms) {
+  return new Date(ms).toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
+}
+
+/**
+ * Dzien kalendarzowy daty zbudowanej przez parser, jako "RRRR-MM-DD".
+ *
+ * extractPolishDates robi new Date(rok, miesiac, dzien), czyli polnoc
+ * w strefie SERWERA. Gdybysmy taka date przeliczali przez strefe albo
+ * porownywali znaczniki czasu, wynik zalezalby od tego, gdzie stoi
+ * backend - a to dokladnie ta rodzina bledu, ktora juz raz kazala nam
+ * poprawiac testy po wdrozeniu. Czytanie pol lokalnych oddaje dzien
+ * dokladnie tak, jak byl zapisany w komunikacie, na kazdym serwerze.
+ */
+function dzienZParsera(data) {
+  const mm = String(data.getMonth() + 1).padStart(2, '0');
+  const dd = String(data.getDate()).padStart(2, '0');
+  return `${data.getFullYear()}-${mm}-${dd}`;
+}
+
+/**
+ * Ostatni dzien zdarzenia, jako "RRRR-MM-DD" - albo null, gdy nie wiadomo.
+ *
+ * Bierzemy NAJPOZNIEJSZA date widoczna w komunikacie, a nie event_date.
+ * event_date to data POCZATKU, bo parser zwraca pierwsza date z tekstu.
+ * Dla "przerwa od 24.11.2026 do 30.11.2026" byloby to 24.11 i gdybysmy
+ * na tym poprzestali, schowalibysmy trwajaca przerwe juz nazajutrz.
+ *
+ * event_date zostaje w grze jako zabezpieczenie dla zrodel, ktore date
+ * podaja osobnym polem, a nie w zdaniu (Enea).
+ *
+ * Gdy tekst poda date dalsza niz trzeba (np. zapowiedz kolejnego
+ * komunikatu), wpis powisi troche dluzej - i tak ma byc. Blad w te
+ * strone znaczy "pokazalismy cos zbednego", blad w druga znaczy
+ * "ukrylismy trwajaca awarie". Od nadmiaru jest regula 3.
+ */
+function koniecZdarzenia(wpis) {
+  const zdarzenie = czas(wpis.event_date);
+  if (zdarzenie === null) return null;
+
+  let koniec = dzienWarszawski(zdarzenie);
+  for (const data of extractPolishDates(`${wpis.title || ''} ${wpis.description || ''}`)) {
+    const dzien = dzienZParsera(data);
+    if (dzien > koniec) koniec = dzien;
+  }
+  return koniec;
+}
+
+/**
  * Dlaczego wpis nie powinien byc widoczny - albo null, gdy ma byc widoczny.
  * Zwracamy powod, a nie samo "nie", zeby dalo sie go wypisac w panelu
  * admina i w logu. Cicho znikajace wpisy juz raz kosztowaly nas w tym
@@ -91,7 +170,16 @@ function powodUkrycia(wpis, teraz = Date.now()) {
     }
   }
 
-  // 2. Skrajny wiek, mimo ze zrodlo wciaz go pokazuje.
+  // 2. Zdarzenie odbylo sie przed dzisiejszym dniem.
+  if (ZDARZENIE_KONCZY_SIE_TEGO_DNIA.has(wpis.category)) {
+    const koniec = koniecZdarzenia(wpis);
+    const dzisiaj = dzienWarszawski(teraz);
+    if (koniec !== null && koniec < dzisiaj) {
+      return `zdarzenie bylo ${koniec}, a dzis mamy ${dzisiaj}`;
+    }
+  }
+
+  // 3. Skrajny wiek, mimo ze zrodlo wciaz go pokazuje.
   const odniesienie = datolicznik(wpis);
   if (odniesienie !== null) {
     const dni = (teraz - odniesienie) / DZIEN_MS;
@@ -128,7 +216,10 @@ module.exports = {
   powodUkrycia,
   podzielWpisy,
   datolicznik,
+  koniecZdarzenia,
+  dzienWarszawski,
   progiDla,
+  ZDARZENIE_KONCZY_SIE_TEGO_DNIA,
   WIDOCZNOSC,
   DOMYSLNE,
   DZIEN_MS,
