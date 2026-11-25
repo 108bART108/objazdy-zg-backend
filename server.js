@@ -6,7 +6,10 @@ const rateLimit = require('express-rate-limit');
 const cron = require('node-cron');
 
 const {
-  listUtrudnienia, db, saveSubscription, deleteSubscription,
+  listUtrudnienia,
+  listDlaAdmina,
+  ukryjWpis,
+  przywrocWpis, db, saveSubscription, deleteSubscription,
   listActiveAds, createAd, updateAd, deactivateAd, listAllAds,
   listHealthReports, listSourceHealth, listSubscriptionSummary,
   checkPushSilence, getPushStats, recordPushAttempt, ensurePushLogStarted,
@@ -294,6 +297,51 @@ app.get('/api/admin/ads', (req, res) => {
 app.post('/api/admin/ads/:id/deactivate', (req, res) => {
   if (!checkAdmin(req, res)) return;
   deactivateAd(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+// --- reczne zdejmowanie wpisow z appki -------------------------------------
+//
+// Filtry zrodel nie wylapia wszystkiego. 24.11.2026 do zakladki "drogi"
+// wszedl artykul o remoncie galerii BWA - filtr poprawilismy, ale sam wpis
+// trzeba bylo zdjac recznie, przez SQL w konsoli serwera. To jest miejsce,
+// w ktorym wlasciciel appki robi to sam, bez grzebania w bazie.
+//
+// Ukrycie NIE kasuje wpisu i da sie je cofnac.
+app.get('/api/admin/utrudnienia', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const limit = Number(req.query.limit);
+  res.json({ items: listDlaAdmina({ limit: Number.isFinite(limit) ? limit : 200 }) });
+});
+
+app.post('/api/admin/utrudnienia/:id/ukryj', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: 'Bledny numer wpisu' });
+    return;
+  }
+  const powod = (req.body && req.body.powod) || '';
+  if (!ukryjWpis(id, powod)) {
+    res.status(404).json({ error: 'Nie ma takiego wpisu albo jest juz ukryty' });
+    return;
+  }
+  console.log(`[admin] ukryto wpis ${id}${powod ? ` (powod: ${powod})` : ''}`);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/utrudnienia/:id/przywroc', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: 'Bledny numer wpisu' });
+    return;
+  }
+  if (!przywrocWpis(id)) {
+    res.status(404).json({ error: 'Nie ma takiego wpisu albo nie byl ukryty' });
+    return;
+  }
+  console.log(`[admin] przywrocono wpis ${id}`);
   res.json({ ok: true });
 });
 

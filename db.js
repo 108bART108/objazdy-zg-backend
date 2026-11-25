@@ -1,7 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const { szukaj, normalizujKategorie, policzKategorie } = require('./szukanie');
-const { podzielWpisy } = require('./widocznosc');
+const { podzielWpisy, powodUkrycia } = require('./widocznosc');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'objazdy.db');
 
@@ -174,6 +174,15 @@ const migrations = [
   // jedne dane od drugich, zeby panel nie zsumowal po cichu liczb, ktore
   // znacza co innego - tej liczby wlasciciel appki uzywa wobec klientow.
   'ALTER TABLE metryki_sesji ADD COLUMN wersja_licznika INTEGER NOT NULL DEFAULT 1',
+  // Reczne ukrycie wpisu przez wlasciciela appki.
+  //
+  // MUSI byc osobna kolumna, a nie zwykle active = 0. Zapis wpisu ustawia
+  // active = 1 przy KAZDYM ponownym zapisaniu, wiec wpis zdjety recznie
+  // wracalby w nastepnym cyklu, dopoki zrodlo go podaje. Tej kolumny
+  // scraper nie dotyka - raz ukryty wpis zostaje ukryty.
+  'ALTER TABLE utrudnienia ADD COLUMN ukryty_recznie INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE utrudnienia ADD COLUMN ukryty_powod TEXT',
+  'ALTER TABLE utrudnienia ADD COLUMN ukryty_kiedy TEXT',
   'ALTER TABLE daily_fact ADD COLUMN source_url TEXT',
 ];
 for (const sql of migrations) {
@@ -490,7 +499,7 @@ function ostrzezOKategorii(kategoria) {
 function policzWKategoriach({ search } = {}) {
   if (!search || !String(search).trim()) return null;
   const wiersze = db.prepare(
-    'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0 '
+    'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0 AND ukryty_recznie = 0 '
     + 'ORDER BY published_at DESC LIMIT @limit',
   ).all({ limit: LIMIT_DO_SZUKANIA });
   // Te same wpisy, ktore widzi lista - inaczej appka napisalaby "2 wyniki
@@ -499,13 +508,75 @@ function policzWKategoriach({ search } = {}) {
   return policzKategorie(widoczne, search);
 }
 
+const MAX_DL_POWODU = 200;
+
+/**
+ * Lista wpisow dla panelu admina - zarowno widocznych, jak i ukrytych.
+ *
+ * Panel pokazuje WIECEJ niz appka: takze wpisy zdjete recznie i te, ktore
+ * wygasly. Wlasciciel musi widziec stan faktyczny, zeby moc cokolwiek
+ * cofnac - inaczej ukryty wpis znika takze przed nim i nie da sie go
+ * przywrocic inaczej niz przez baze.
+ */
+function listDlaAdmina({ limit = 200 } = {}) {
+  const wiersze = db.prepare(
+    'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0 '
+    + 'ORDER BY published_at DESC LIMIT @limit',
+  ).all({ limit: Math.min(Math.max(Number(limit) || 200, 1), 500) });
+
+  const teraz = Date.now();
+  return wiersze.map((w) => ({
+    id: w.id,
+    title: w.title,
+    street: w.street,
+    category: w.category,
+    source_name: w.source_name,
+    source_url: w.source_url,
+    published_at: w.published_at,
+    event_date: w.event_date,
+    ukryty_recznie: w.ukryty_recznie ? 1 : 0,
+    ukryty_powod: w.ukryty_powod,
+    ukryty_kiedy: w.ukryty_kiedy,
+    // Dlaczego appka go nie pokazuje, jesli nie pokazuje - zeby wlasciciel
+    // nie szukal po omacku, czemu wpisu nie widac.
+    powod_niewidocznosci: w.ukryty_recznie ? 'ukryty recznie' : powodUkrycia(w, teraz),
+  }));
+}
+
+/** Reczne zdjecie wpisu z appki. Nie kasuje go - da sie cofnac. */
+function ukryjWpis(id, powod) {
+  const wynik = db.prepare(`
+    UPDATE utrudnienia
+    SET ukryty_recznie = 1,
+        ukryty_powod = @powod,
+        ukryty_kiedy = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE id = @id AND ukryty_recznie = 0
+  `).run({
+    id: Number(id),
+    powod: String(powod || '').replace(/\s+/g, ' ').trim().slice(0, MAX_DL_POWODU) || null,
+  });
+  return wynik.changes > 0;
+}
+
+/** Cofniecie recznego ukrycia. */
+function przywrocWpis(id) {
+  const wynik = db.prepare(`
+    UPDATE utrudnienia
+    SET ukryty_recznie = 0, ukryty_powod = NULL, ukryty_kiedy = NULL
+    WHERE id = @id AND ukryty_recznie = 1
+  `).run({ id: Number(id) });
+  return wynik.changes > 0;
+}
+
 function listUtrudnienia({ category, search, limit = 50 } = {}) {
   // needs_review = 0: appka pokazuje tylko wpisy, ktore przeszly
   // automatyczne sprawdzenie jakosci (qualityCheck) bez zastrzezen.
   // Nie ma tu zadnego recznego kroku - wpis albo przechodzi test przy
   // scrapowaniu, albo czeka na kolejny cykl, w ktorym scraper moze
   // wyciagnac lepsza tresc (np. po naprawieniu ekstrakcji zrodla).
-  let query = 'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0';
+  // ukryty_recznie = 0: wpisy zdjete recznie z panelu admina nie wracaja
+  // do appki, nawet gdy zrodlo nadal je podaje.
+  let query = 'SELECT * FROM utrudnienia WHERE active = 1 AND needs_review = 0 AND ukryty_recznie = 0';
   const params = {};
 
   // Kategorie sprowadzamy do nazwy z bazy. Wczesniej porownanie bylo
@@ -1114,6 +1185,9 @@ module.exports = {
   db,
   upsertMany,
   listUtrudnienia,
+  listDlaAdmina,
+  ukryjWpis,
+  przywrocWpis,
   getDescriptionsByUrls,
   policzWKategoriach,
   zapiszSesje,
