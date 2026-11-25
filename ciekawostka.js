@@ -20,6 +20,13 @@ function todayDate() {
 
 let activeModel = MODEL;
 
+const MAX_WYSZUKAN = 2;
+const LIMIT_TRESCI = 500;
+// Do przepisania wysylamy tylko poczatek odpowiedzi - gotowa wersja stoi
+// w recenzji blisko poczatku albo blisko konca, a nie ma sensu placic za
+// przepisywanie calego wywodu.
+const LIMIT_DO_PRZEPISU = 6000;
+
 // POMIAR ZUZYCIA API.
 //
 // Ciekawostka jest jedyna czescia appki, ktora placi za siebie z konta API -
@@ -77,7 +84,15 @@ async function callClaude(prompt, useSearch, etykieta = 'krok') {
       max_tokens: useSearch ? 4096 : 2048,
       messages: [{ role: 'user', content: prompt }],
     };
-    if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
+    // Limit wyszukan na jedno wywolanie. Bez niego model szuka, ile uzna
+    // za stosowne - pomiar z 25.11.2026 pokazal rozrzut od 2 do 4 zapytan
+    // na wywolanie. Koszt nie siedzi w samej oplacie za wyszukanie, tylko
+    // w tym, co ono przynosi: wyniki wracaja jako tokeny WEJSCIA i jedno
+    // zapytanie to srednio kilkanascie tysiecy tokenow. Dwa zrodla
+    // wystarcza, zeby sprawdzic jednozdaniowy fakt.
+    if (useSearch) {
+      body.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: MAX_WYSZUKAN }];
+    }
 
     return fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -170,12 +185,61 @@ Tylko zawartosc miedzy znacznikami <ciekawostka> i </ciekawostka> zostanie opubl
 Jesli oryginalny tekst byl juz poprawny i wiarygodny - wstaw go w znacznikach bez zmian. Jesli mial bledy jezykowe - popraw je w wersji w znacznikach. Jesli laczyl dwa tematy - w znacznikach zostaw tylko pierwszy. Jesli fakt byl niepewny - w znacznikach umiesc ostrozniejsze sformulowanie lub inny, pewny fakt.`;
 
   const text = await callClaude(prompt, true, 'weryfikacja');
-  const match = text.match(/<ciekawostka>([\s\S]*?)<\/ciekawostka>/i);
-  if (!match) {
-    console.warn('[ciekawostka] recenzent nie uzyl wymaganych znacznikow - odrzucam odpowiedz');
+  const odzyskane = await wyciagnijZeZnacznikow(text, 'ciekawostka', 'weryfikacja');
+  return odzyskane;
+}
+
+/**
+ * Wyciaga tresc ze znacznikow, a gdy ich nie ma - PROSI O SAM PRZEPIS,
+ * zamiast wyrzucac cala odpowiedz.
+ *
+ * To jest najdrozsze miejsce w calym module i najglupsza przyczyna kosztow.
+ * Pomiar z 25.11.2026: recenzent napisal porzadna recenzje (4779 tokenow
+ * wyjscia), ale nie opakowal jej w znaczniki - i kod wyrzucil ja w calosci,
+ * po czym zaczal od nowa z nowym wyszukiwaniem. Tamten dzien kosztowal
+ * 9 wywolan, 250 tysiecy tokenow wejscia i 15 platnych wyszukan zamiast
+ * trzech wywolan i pieciu wyszukan. Zaplacilismy za prace, ktora byla
+ * gotowa, i wyrzucilismy ja przez formalnosc.
+ *
+ * Przepisanie to jedno male wywolanie BEZ wyszukiwania - okolo tysiaca
+ * tokenow, czyli jakies trzydziesci razy taniej niz pelny nowy cykl.
+ * Odzyskany tekst przechodzi dokladnie te same kontrole co kazdy inny,
+ * wiec nie obchodzimy tu zadnego zabezpieczenia - tylko nie wyrzucamy
+ * tresci, ktora juz mamy.
+ */
+async function wyciagnijZeZnacznikow(text, znacznik, etykieta) {
+  const wzorzec = new RegExp(`<${znacznik}>([\\s\\S]*?)</${znacznik}>`, 'i');
+
+  const wprost = text.match(wzorzec);
+  if (wprost) return wprost[1].trim().slice(0, LIMIT_TRESCI);
+
+  console.warn(`[ciekawostka] ${etykieta}: odpowiedz bez znacznikow `
+    + `(${text.length} zn.) - prosze o sam przepis zamiast generowac od nowa`);
+
+  const prompt = `Ponizej jest odpowiedz, ktora miala zawierac ciekawostke `
+    + `o Zielonej Gorze w znacznikach <${znacznik}></${znacznik}>, ale ich zabraklo.\n\n`
+    + `Znajdz w niej gotowa, finalna wersje ciekawostki i zwroc JA SAMA, `
+    + `w znacznikach. Nie pisz nic poza znacznikami. Nie dopisuj komentarzy `
+    + `ani wyjasnien. Nie zmieniaj tresci - tylko ja wydobadz. Jesli w tekscie `
+    + `nie ma gotowej ciekawostki, zwroc puste znaczniki.\n\n`
+    + `--- odpowiedz do przepisania ---\n${text.slice(0, LIMIT_DO_PRZEPISU)}`;
+
+  let przepisane;
+  try {
+    przepisane = await callClaude(prompt, false, `${etykieta}-przepis`);
+  } catch (err) {
+    console.warn(`[ciekawostka] ${etykieta}: przepisanie nie powiodlo sie (${err.message})`);
     return null;
   }
-  return match[1].trim().slice(0, 500);
+
+  const match = przepisane.match(wzorzec);
+  if (!match || !match[1].trim()) {
+    console.warn(`[ciekawostka] ${etykieta}: w odpowiedzi nie bylo gotowej ciekawostki`);
+    return null;
+  }
+
+  console.log(`[ciekawostka] ${etykieta}: tresc odzyskana bez ponownego generowania`);
+  return match[1].trim().slice(0, LIMIT_TRESCI);
 }
 
 // Prosty, niezalezny od modelu filtr bezpieczenstwa: jesli odpowiedz modelu
@@ -227,12 +291,7 @@ FORMAT ODPOWIEDZI - obowiazkowy. Na samym koncu umiesc poprawiony tekst dokladni
 </poprawiona>`;
 
   const out = await callClaude(prompt, false, 'korekta');
-  const match = out.match(/<poprawiona>([\s\S]*?)<\/poprawiona>/i);
-  if (!match) {
-    console.warn('[ciekawostka] naprawa nie uzyla znacznikow - pomijam');
-    return null;
-  }
-  return match[1].trim().slice(0, 500);
+  return wyciagnijZeZnacznikow(out, 'poprawiona', 'korekta');
 }
 
 // KROK 3: korekta czysto jezykowa. Osobne, waskie zadanie - model nie
@@ -264,12 +323,7 @@ FORMAT ODPOWIEDZI - obowiazkowy. Na samym koncu odpowiedzi umiesc poprawiony tek
 Jesli tekst nie zawiera zadnych bledow - wstaw go w znacznikach bez zmian.`;
 
   const out = await callClaude(prompt, false, 'naprawa');
-  const match = out.match(/<poprawiona>([\s\S]*?)<\/poprawiona>/i);
-  if (!match) {
-    console.warn('[ciekawostka] korektor nie uzyl znacznikow - pomijam krok korekty');
-    return null;
-  }
-  return match[1].trim().slice(0, 500);
+  return wyciagnijZeZnacznikow(out, 'poprawiona', 'naprawa');
 }
 
 // Deterministyczna kontrola jezykowa - nie zalezy od zadnego modelu.

@@ -167,6 +167,17 @@ function sprawdzTresc() {
         continue;
       }
       const wynik = uruchomTesty();
+
+      // Ta kontrola jest synchroniczna. Test asynchroniczny oddalby tu
+      // obietnice zamiast wyniku: policzylibysmy zero przypadkow i NIE
+      // zglosili zadnego bledu, choc test w ogole by nie przeszedl.
+      // Cicha awaria w miejscu, ktore ma pilnowac wszystkich innych.
+      if (wynik && typeof wynik.then === 'function') {
+        problemy.push(`${nazwa}: test jest asynchroniczny, a ta kontrola jest synchroniczna `
+          + '- uruchom go osobno albo przerob na synchroniczny');
+        continue;
+      }
+
       sprawdzonych += wynik.sprawdzonych || 0;
       for (const blad of wynik.bledy || []) problemy.push(`${nazwa} - ${blad}`);
     } catch (err) {
