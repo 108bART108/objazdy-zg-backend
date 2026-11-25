@@ -47,7 +47,23 @@
 // przy ODCZYCIE. Zly prog cofa sie jednym wdrozeniem, a w panelu admina
 // widac caly stan faktyczny.
 
-const { extractPolishDates } = require('./polishDates');
+const polishDates = require('./polishDates');
+
+// WGRYWANIE PLIKU PO PLIKU. Ten plik potrzebuje extractPolishDates, ktore
+// dopisalem do polishDates.js tego samego dnia. Pliki ida na serwer przez
+// strone GitHuba, pojedynczo, i kazdy z osobna wdraza sie od razu - wiec
+// przez kilka minut nowy widocznosc.js chodzi obok STAREGO polishDates.js.
+// Bez tej linii leci wtedy "extractPolishDates is not a function" przy
+// kazdym odczycie wpisow o wodzie i pradzie, czyli dwie zakladki w appce
+// zwracaja blad. Sprawdzone, nie teoretyczne.
+//
+// Gdy funkcji nie ma, regula 2 po prostu nie dziala - appka zachowuje sie
+// dokladnie tak jak przed ta zmiana. To jedyne bezpieczne zachowanie:
+// zgadywanie konca zdarzenia z samej daty poczatku chowaloby przerwy,
+// ktore wlasnie trwaja. Regula wlacza sie sama, gdy dojedzie drugi plik.
+function maParserDat() {
+  return typeof polishDates.extractPolishDates === 'function';
+}
 
 const DZIEN_MS = 24 * 3600 * 1000;
 
@@ -142,8 +158,13 @@ function koniecZdarzenia(wpis) {
   const zdarzenie = czas(wpis.event_date);
   if (zdarzenie === null) return null;
 
+  // Bez parsera dat NIE ZGADUJEMY. Samo event_date to data poczatku, wiec
+  // oparcie sie na niej chowaloby przerwy, ktore wlasnie trwaja. Lepiej,
+  // zeby regula milczala do czasu, az dojedzie drugi plik.
+  if (!maParserDat()) return null;
+
   let koniec = dzienWarszawski(zdarzenie);
-  for (const data of extractPolishDates(`${wpis.title || ''} ${wpis.description || ''}`)) {
+  for (const data of polishDates.extractPolishDates(`${wpis.title || ''} ${wpis.description || ''}`)) {
     const dzien = dzienZParsera(data);
     if (dzien > koniec) koniec = dzien;
   }

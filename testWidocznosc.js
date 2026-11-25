@@ -313,6 +313,35 @@ function testTrwajaceNieZnikaja() {
     czyWidoczny(bezDaty, DWUDZIESTY_PIATY));
 }
 
+function testStareZaleznosci() {
+  // Pliki ida na serwer przez strone GitHuba, POJEDYNCZO, i kazdy wdraza
+  // sie od razu. Przez kilka minut nowy widocznosc.js chodzi wiec obok
+  // starego polishDates.js, ktory nie ma jeszcze extractPolishDates.
+  // Zanim dopisalem zabezpieczenie, leciala wtedy awaria przy kazdym
+  // odczycie wpisow o wodzie i pradzie - czyli dwie zakladki w appce
+  // zwracaly blad. Sprawdzone na zywym kodzie, nie teoretyczne.
+  const polishDates = require('./polishDates');
+  const prawdziwa = polishDates.extractPolishDates;
+  delete polishDates.extractPolishDates;
+
+  try {
+    sprawdz('bez nowego parsera dat nic nie wybucha',
+      czyWidoczny(DZISIEJSZA_PRZERWA, DWUDZIESTY_PIATY));
+    rowne('bez nowego parsera regula po prostu nie dziala - jak przed zmiana',
+      powodUkrycia(WCZORAJSZA_PRZERWA, DWUDZIESTY_PIATY), null);
+    // Nie wolno tu wrocic do samego event_date: to data POCZATKU, wiec
+    // regula schowalaby przerwy, ktore wlasnie trwaja. Ma milczec.
+    rowne('bez parsera nie zgadujemy konca zdarzenia',
+      koniecZdarzenia(WCZORAJSZA_PRZERWA), null);
+  } finally {
+    polishDates.extractPolishDates = prawdziwa;
+  }
+
+  // Po dojechaniu drugiego pliku regula wlacza sie sama.
+  sprawdz('gdy drugi plik dojedzie, regula dziala bez restartu',
+    !czyWidoczny(WCZORAJSZA_PRZERWA, DWUDZIESTY_PIATY));
+}
+
 function testStrefaCzasowa() {
   // Render chodzi na UTC, mieszkaniec zyje w Warszawie. Miedzy polnoca
   // a pierwsza w nocy (latem druga) serwer ma jeszcze "wczoraj" - i bez
@@ -344,6 +373,7 @@ function uruchomTesty() {
   testZnikaja();
   testZdarzenieMinelo();
   testTrwajaceNieZnikaja();
+  testStareZaleznosci();
   testStrefaCzasowa();
   testZostaja();
   testProgi();
